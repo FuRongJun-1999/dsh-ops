@@ -24,9 +24,13 @@ config:
 
 - 当前选中会话自该组件启用后观察到的原生与 PTC OPS 调用。
 - 调用数、运行中、传输返回/错误与最近观察耗时。
+- 原生文件/PTC 结构化返回中的拒绝、业务失败、预览/计划、部分失败和明确的未知副作用；未知副作用会提示先检查、不要盲目重试。
+- 已结算的批处理完成数量、未展示明细数量及分页提示；不伪造实时进度。
 - 达到上限时明确标记统计不完整。「已返回」是中性状态，**不代表业务成功**；后台任务启动调用返回不代表任务已经完成。
 
 这不是历史重放或持久用量统计。关闭再打开面板不重置观测，卸载组件才清空。不保留命令、参数、搜索模式、替换文本、路径、结果正文或错误正文。切换会话只切换快照，不增加模型/worker 调用、job_output 读取、轮询、提示词段落或 token 节省估算。不提供删除、重试、提权或发送给模型按钮。
+
+Shell 输出或被 spill/截断的内容无法可靠恢复业务状态，会保持「业务状态未确认」，不会假报成功。只解析最多 64 KiB 的单条 JSON 文本，且只保留固定类别、计数、布尔值和有界错误码，不保留错误正文。
 
 ## 上限
 
@@ -43,7 +47,7 @@ TUI 行只接受以下键：
 ## 验证
 
 ```console
-node test/run.mjs tui-activity tui-panel manifest
+node test/run.mjs tui-activity tui-panel tui-result manifest
 DSH_OPS_TUI_ROOT=/path/to/dsh-TUI DSH_OPS_REQUIRE_TUI=1 node test/run.mjs tui-host
 ```
 

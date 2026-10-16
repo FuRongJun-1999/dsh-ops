@@ -20,7 +20,10 @@ process.env.FORCE_COLOR = '3'
 const rootPath = resolve(target), require = createRequire(join(rootPath, 'package.json'))
 const source = existsSync(join(rootPath, 'src', 'dsh-adapter', 'panels.ts'))
 let unregister
-if (source) ({ unregister } = { unregister: (await import(pathToFileURL(require.resolve('tsx/esm/api')).href)).register() })
+if (source) {
+  const { register } = await import(pathToFileURL(require.resolve('tsx/esm/api')).href)
+  unregister = register()
+}
 const hostModule = file => import(pathToFileURL(join(rootPath, source ? 'src' : 'lib/types', file + (source ? '.ts' : '.js'))).href)
 const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href)
 const { default: Loader } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis-plugin-loader')).href)
@@ -61,6 +64,10 @@ try {
   if (panelStore.get(id)) for (const fullscreen of [false, true]) for (const width of [28, 38]) {
     await test('real panel renders and follows sessions: ' + (fullscreen ? 'fullscreen' : 'inline') + ', width ' + width, async () => {
       const columns = width + 20, rows = 18
+      const chinese = width === 28
+      setLang(chinese ? 'zh' : 'en')
+      const words = chinese ? { calls: '调用', returned: '已返回', unknown: '副作用未知' } : { calls: 'Calls', returned: 'Returned', unknown: 'Unknown effects' }
+      let showPanel = true
       const term = new Terminal({ cols: columns, rows, scrollback: 100, allowProposedApi: true })
       class Output extends Writable {
         columns = columns; rows = rows; isTTY = true
@@ -75,27 +82,39 @@ try {
       const tree = () => {
         const body = React.createElement(ui.ThemeProvider, { theme: 'dark' }, React.createElement(ui.Box, null,
           React.createElement(ui.Box, { width: 18 }, React.createElement(ui.Text, null, 'chat-ok')),
-          React.createElement(PanelHost, { controller, channel: session, width, height: 16 })))
+          showPanel ? React.createElement(PanelHost, { controller, channel: session, width, height: 16 }) : null))
         return fullscreen ? React.createElement(ui.AlternateScreen, null, body) : body
       }
       const app = await ui.render(tree(), { stdout: new Output(), stdin: new Input(),
         stderr: new Writable({ write(_chunk, _encoding, done) { done() } }), patchConsole: false, exitOnCtrlC: false })
       try {
-        await waitFor(() => screen().includes('Calls') && screen().includes('chat-ok'), { what: 'OPS first frame' })
+        await waitFor(() => screen().includes(words.calls) && screen().includes('chat-ok'), { what: 'OPS first frame' })
         // Use a new synthetic session per render run; these are NOT native-worker acceptance fixtures.
         const key = 'run-' + fullscreen + '-' + width
         session = { ...session, sessionId: key, version: 1 }; app.rerender(tree())
         root.emit('session/event', { id: key }, call(1))
         root.emit('session/event', { id: key }, result(2))
-        await waitFor(() => screen().includes('Returned 1'), { what: 'live OPS result' })
-        assert.ok(screen().includes('ops_grep'))
+        await waitFor(() => screen().includes(words.returned + ' 1'), { what: 'live OPS result' })
+        root.emit('session/event', { id: key }, call(3, 'denied', 'ops_replace'))
+        root.emit('session/event', { id: key }, result(4, 'denied', { status: 'rejected', error: { code: 'POLICY_DENIED', message: 'PRIVATE_ERROR' } }))
+        root.emit('session/event', { id: key }, call(5, 'batch', 'ops_batch'))
+        root.emit('session/event', { id: key }, result(6, 'batch', { status: 'partial', done: 2, total: 3, unknown: 1, complete: false, omitted: 3 }))
+        await waitFor(() => screen().includes(words.unknown + ' 1'), { what: 'business refusal and unknown effects' })
+        assert.equal(screen().includes('PRIVATE_ERROR'), false)
+        assert.ok(screen().includes('ops_batch'))
         assert.ok(screen().includes('chat-ok'))
         const captured = screen()
         session = { ...session, sessionId: key + '-other', version: 2 }; app.rerender(tree())
-        await waitFor(() => screen().includes('Calls 0'), { what: 'session switch isolation' })
+        await waitFor(() => screen().includes(words.calls + ' 0'), { what: 'session switch isolation' })
         session = { ...session, sessionId: key, version: 3 }; app.rerender(tree())
-        await waitFor(() => screen().includes('Returned 1'), { what: 'session statistics restored' })
-        if (fullscreen && width === 38) console.log('\n--- OPS headless frame (synthetic events) ---\n' + captured + '\n--- end frame ---')
+        await waitFor(() => screen().includes(words.returned + ' 3'), { what: 'session statistics restored' })
+        showPanel = false; app.rerender(tree())
+        await waitFor(() => !screen().includes(words.calls), { what: 'panel unmounted' })
+        root.emit('session/event', { id: key }, call(7, 'hidden', 'ops_glob'))
+        root.emit('session/event', { id: key }, result(8, 'hidden', { status: 'completed', complete: true }))
+        showPanel = true; app.rerender(tree())
+        await waitFor(() => screen().includes(words.returned + ' 4'), { what: 'hidden-panel observation retained' })
+        if (fullscreen) console.log('\n--- OPS headless frame (synthetic events) ---\n' + captured + '\n--- end frame ---')
       } finally { await app.unmount(); term.dispose() }
     })
   }

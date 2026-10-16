@@ -18,6 +18,10 @@ Snapshots are immutable and referentially stable until that session changes. Sub
 
 `returned` means the tool transport returned without a host error; it does **not** mean an operation succeeded. OPS can return structured `status: error/rejected` values without throwing. UI consumers must not render a neutral return as a successful mutation. No token savings, model-visible output volume, or background-job completion is inferred.
 
+## Native result diagnostics
+
+For the four native file tools and two PTC tools only, `result.js` parses a single JSON text envelope of at most 64 KiB (serialized UTF-8 bytes). It retains only known outcome categories, safe nonnegative counters, boolean flags and a bounded uppercase error code. Raw text, items, paths and error messages are discarded. Host failure cannot be upgraded to confirmed success. Shell prose and spilled/malformed output remain business-unconfirmed. Explicit unknown effects are distinguished from merely unavailable business status. No result reference is followed and no progress percentage or token saving is inferred.
+
 ## Verification
 
 ```console

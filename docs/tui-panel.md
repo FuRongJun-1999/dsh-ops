@@ -24,9 +24,13 @@ The OPS tab does not open itself or change focus. No TUI/React runtime dependenc
 
 - Live native and PTC OPS calls for the selected session, since this component was enabled.
 - Calls, in-flight count, transport returns/errors and recent observed durations.
+- Refusal, operation errors, preview/plan, partial failure and explicit unknown effects from native file/PTC JSON envelopes; unknown effects warn against blind retry.
+- Settled batch counts, omitted details and paging hints, never invented live progress.
 - Tracking-limit warnings. A return is neutral, **not proof of business success**; a background launch returning does not mean the job finished.
 
 This is not history replay or persistent accounting. Closing/reopening the tab preserves observation; unloading clears it. No command, argument, pattern, replacement, path, result body or error text is retained. Session changes select a different snapshot. No extra model/worker calls, job-output reads, polling, prompt sections or token-savings estimates are added. There are no destructive actions or send-to-chat controls.
+
+Shell prose and spilled/truncated content cannot reliably establish business status and remain business-unconfirmed, never success. Only a single JSON text of at most 64 KiB is parsed; fixed categories, counters, booleans and a bounded error code are retained, not error messages.
 
 ## Limits
 
@@ -43,7 +47,7 @@ These bound observer memory, not tool execution. At active capacity, new calls a
 ## Verification
 
 ```console
-node test/run.mjs tui-activity tui-panel manifest
+node test/run.mjs tui-activity tui-panel tui-result manifest
 DSH_OPS_TUI_ROOT=/path/to/dsh-TUI DSH_OPS_REQUIRE_TUI=1 node test/run.mjs tui-host
 ```
 

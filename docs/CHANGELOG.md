@@ -121,6 +121,10 @@ The capability is taken; the duplicate component is not.
 
 ## [Unreleased]
 
+### Sidebar result diagnostics
+
+- Distinguish native file/PTC business refusals, errors, previews, partial settlement and unknown effects from transport returns. Parse only bounded native JSON envelopes, retain no result bodies, and leave shell/spilled output unconfirmed. Show omitted details without fetching them and warn against blind retries after unknown effects.
+
 ### Optional dsh-TUI sidebar
 
 - Add disabled-by-default `dsh-ops/tui`, with its own admission manifest and no TUI/React runtime dependency. It observes current-session tool events through a bounded store, uses the host UI kit, and releases its panel and listeners on unload. No tool, prompt, command, polling, profile write or focus change is added.
