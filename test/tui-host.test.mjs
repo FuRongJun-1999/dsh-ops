@@ -1,42 +1,12 @@
 /** Optional, real dsh-TUI Loader/admission/headless composition. Never uses a user HOME. */
-import { createRequire } from 'node:module'
-import { mkdirSync, existsSync, symlinkSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { mkdirSync, symlinkSync } from 'node:fs'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Writable, PassThrough } from 'node:stream'
-import { assert, report, test, skipSuite, TEST_HOME, PACKAGE_ROOT, waitFor } from './lib/harness.mjs'
+import { assert, report, test, TEST_HOME, PACKAGE_ROOT, waitFor } from './lib/harness.mjs'
 import { call, result } from './lib/activity-events.mjs'
-
-const target = process.env.DSH_OPS_TUI_ROOT
-if (!target) {
-  if (process.env.DSH_OPS_REQUIRE_TUI === '1') throw new Error('DSH_OPS_TUI_ROOT is required for real TUI acceptance.')
-  skipSuite('TUI host', 'set DSH_OPS_TUI_ROOT to a dsh-TUI checkout or built package')
-}
-// TUI preferences and ledger paths are fixed at module import, before any host module may load.
-process.env.HOME = TEST_HOME
-process.env.USERPROFILE = TEST_HOME
-process.env.DSH_TUI_LANG = 'en'
-process.env.FORCE_COLOR = '3'
-const rootPath = resolve(target), require = createRequire(join(rootPath, 'package.json'))
-const source = existsSync(join(rootPath, 'src', 'dsh-adapter', 'panels.ts'))
-let unregister
-if (source) {
-  const { register } = await import(pathToFileURL(require.resolve('tsx/esm/api')).href)
-  unregister = register()
-}
-const hostModule = file => import(pathToFileURL(join(rootPath, source ? 'src' : 'lib/types', file + (source ? '.ts' : '.js'))).href)
-const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href)
-const { default: Loader } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis-plugin-loader')).href)
-const React = (await import(pathToFileURL(require.resolve('react')).href)).default
-const { Terminal } = (await import(pathToFileURL(require.resolve('@xterm/headless')).href)).default
-const hostRow = await hostModule('dsh-adapter/plugin-host')
-const { TuiPanelRuntime } = await hostModule('dsh-adapter/panels')
-const { armAdmissionLoader } = await hostModule('dsh-adapter/admission-loader')
-const { panelStore } = await hostModule('components/sidePanel/PanelStore')
-const { PanelHost } = await import(pathToFileURL(join(rootPath, source ? 'src/components/sidePanel/PanelHost.tsx' : 'lib/types/components/sidePanel/PanelHost.js')).href)
-const ui = await hostModule('ui')
-const { setLang } = await hostModule('i18n')
-setLang('en')
+import { Context, Loader, React, Terminal, hostRow, TuiPanelRuntime, armAdmissionLoader,
+  panelStore, PanelHost, ui, setLang, unregister } from './lib/tui-host.mjs'
 
 const composition = join(TEST_HOME, 'composition')
 mkdirSync(join(composition, 'node_modules'), { recursive: true })

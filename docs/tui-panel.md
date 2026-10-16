@@ -53,4 +53,15 @@ DSH_OPS_TUI_ROOT=/path/to/dsh-TUI DSH_OPS_REQUIRE_TUI=1 node test/run.mjs tui-ho
 
 The optional host suite resolves React/Cordis/rendering dependencies from the same TUI checkout or built package and isolates HOME/USERPROFILE/DSH_HOME before importing it. It tests real Loader admission, the exported OPS subpath, inline/fullscreen rendering at panel widths 28/38, session switching and unload. Tool events are synthetic: this is not native Windows, OS sandbox or manual PTY acceptance. Without the root variable the suite is counted as skipped, never passed; `DSH_OPS_REQUIRE_TUI=1` makes a missing root fail.
 
+### Real source-worker integration
+
+Build the independent worker explicitly (Rust 1.97.1), then opt into the separate suite:
+
+```console
+cargo build --release --locked --manifest-path native/Cargo.toml
+DSH_OPS_TUI_ROOT=/path/to/dsh-TUI DSH_OPS_TUI_WORKER=/absolute/path/to/dsh-ops/native/target/release/dsh-ops-worker DSH_OPS_REQUIRE_NATIVE_TUI=1 node test/run.mjs tui-native
+```
+
+This uses the real Rust worker, OPS file runtime, DSH tool runtime, AgentLoop and Session post-commit notifications, plus the real admitted sidebar and renderer. Model responses and policy selection are scripted fixtures; no online model is called. It covers native file reads, bounded listings, dry-run replacement and read-only refusal. PTC batch/result execution, production PTC-only publication, run_code execution, disk-persistence durability, Windows confinement and manual PTY acceptance are **not** covered. Only owned temporary fixtures are mutated; HOME/USERPROFILE/DSH_HOME stay isolated. The suite neither builds/downloads a worker nor changes the release platform resolver. Missing opt-in prerequisites are counted as skipped; the required flag makes them fail.
+
 The sidebar does not change the package's declared targets: Windows x64, Linux x64 and macOS arm64. UI tests alone do not establish native execution or OS sandbox acceptance.

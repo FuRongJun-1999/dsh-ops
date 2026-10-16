@@ -121,6 +121,10 @@ The capability is taken; the duplicate component is not.
 
 ## [Unreleased]
 
+### Native sidebar source integration
+
+- Add opt-in real Rust worker → OPS file runtime → DSH AgentLoop/committed Session → admitted TUI coverage, with a scripted model and owned temporary workspace. Keep source-test registration separate from Windows release support and production PTC/confinement acceptance.
+
 ### Sidebar result diagnostics
 
 - Distinguish native file/PTC business refusals, errors, previews, partial settlement and unknown effects from transport returns. Parse only bounded native JSON envelopes, retain no result bodies, and leave shell/spilled output unconfirmed. Show omitted details without fetching them and warn against blind retries after unknown effects.
