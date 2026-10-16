@@ -4,19 +4,40 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import Sandbox from '@deepseek-ai/dsh-sandbox-local'
 import Subprocess from '@deepseek-ai/dsh-subprocess-local'
-import { assert, test, report, withTempDir, ownWindowsFixture } from './lib/harness.mjs'
+import { assert, test, report, skipSuite, withTempDir, ownWindowsFixture } from './lib/harness.mjs'
 import { bootHost, shutdown } from './lib/host.mjs'
 import { prepareWorkspace, mountWorkspacePreparation, runPreparation, preparationEnvironment, preparationSpawnSpec } from '../lib/workspace-preparation.js'
 import { invoke as fileCall } from '../lib/file/worker.js'
 import { invoke as ptcCall } from '../lib/ptc/worker.js'
-import { resolveWorker } from '../lib/ptc/runtime.js'
+import { tryResolveWorker } from '../lib/ptc/runtime.js'
 import { mountSessionBash } from '../lib/session-shells.js'
 import { resolveShells } from '../lib/shells.js'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import NodePtc from '@deepseek-ai/dsh-ptc-runtime-node'
 import FileSystem from '@deepseek-ai/dsh-fs-local'
 import * as ObservationPolicy from '@deepseek-ai/dsh-fs-observation-policy'
-const worker = resolveWorker()
+/**
+ * The worker this suite drives, or a visible skip.
+ *
+ * `resolveWorker()` throws when the host is outside the support matrix
+ * (`lib/ptc/runtime.js`), and that exception used to be raised while this module
+ * was still loading: such a host died with an uncaught error before a single
+ * check was named. Resolve it through `tryResolveWorker` and exit through the
+ * repository's skip convention, so a host that cannot answer says so and
+ * `test/run.mjs` counts it apart from the suites that ran. On a supported host
+ * with the worker built, resolution succeeds and every check below runs exactly
+ * as before.
+ */
+let worker
+{
+  const attempt = tryResolveWorker()
+  if (!attempt.ok) {
+    const reason = `this host cannot resolve the native worker (${attempt.reason})`
+    if (process.env.DSH_OPS_REQUIRE_RUNTIME === '1') throw new Error(reason)
+    skipSuite('permissions', reason)
+  }
+  worker = attempt.file
+}
 function ps(code) {
   // The interpreter here is the inbox 5.1 one, and a pwsh 7 host publishes its own module directories
   // into the **process-level** `PSModulePath`; 5.1 then resolves `Microsoft.PowerShell.Security` to

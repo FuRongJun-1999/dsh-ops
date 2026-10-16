@@ -157,6 +157,17 @@ fix; see that entry for the `PSModulePath` scope note.
   the path it was given, and that path's ancestors, for reparse points, rather than comparing the
   given path with its resolved form: a short name changes one into the other with no link involved.
 
+### A host outside the matrix skips the worker-driven suites instead of crashing
+
+`lib/ptc/runtime.js` gains `tryResolveWorker()`, the non-throwing form of
+`resolveWorker()`: the support matrix is still checked in one place, and the result is
+either the resolved file or a complete reason clause. `test/permissions.test.mjs` and
+`test/ptc.test.mjs` use it to leave through `skipSuite` (exit 77) when the host cannot
+answer, where the first of them previously threw while the module was still loading and
+the second failed a load-time existence check. `DSH_OPS_REQUIRE_RUNTIME=1` turns either
+absence into a failure rather than a green run, and a supported host with the worker
+built runs every check exactly as before.
+
 ## [0.3.0] — 2026-10-14 — Windows x64 native tools and PTC
 
 Release scope: **Windows x64 only**, targeting DSH 0.2.0-rc.2. macOS arm64 is

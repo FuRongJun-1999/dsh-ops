@@ -1,7 +1,7 @@
 /** Three end-to-end scenarios: real Rust worker + real Cordis/tools/prompt;
  * simulated workspace and confinement provider, no business code in tests.
  */
-import { ownWindowsFixture } from './lib/harness.mjs'
+import { ownWindowsFixture, skipSuite } from './lib/harness.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -13,7 +13,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import * as ptc from '../lib/ptc/index.js'
 import { definition } from '../lib/ptc/contract.js'
-import { resolveWorker } from '../lib/ptc/runtime.js'
+import { tryResolveWorker, resolveWorker } from '../lib/ptc/runtime.js'
 import Sandbox from '@deepseek-ai/dsh-sandbox-local'
 import Subprocess from '@deepseek-ai/dsh-subprocess-local'
 import { invoke } from '../lib/ptc/worker.js'
@@ -35,6 +35,19 @@ const workerCandidates = [
   ]),
 ].filter(candidate => candidate !== undefined)
 const file = workerCandidates.find(candidate => fs.existsSync(candidate))
+if (file === undefined) {
+  // No built or staged worker at all: a suite that drives the native worker cannot
+  // answer here, and upstream this failed while the module was still loading. Say so
+  // as a skip (exit 77) — never as a pass — and let DSH_OPS_REQUIRE_RUNTIME=1 turn the
+  // absence into a failure, the way the other worker-driven suites do. The reason comes
+  // from the runtime module's own matrix rather than a second copy of it here.
+  const attempt = tryResolveWorker()
+  const reason = attempt.ok
+    ? `no built or staged native worker for ${process.platform}-${process.arch}; run npm run build:ptc`
+    : `this host cannot resolve the native worker (${attempt.reason})`
+  if (process.env.DSH_OPS_REQUIRE_RUNTIME === '1') throw new Error(reason)
+  skipSuite('ptc', reason)
+}
 assert.ok(file, `Build the independent worker with npm run build:ptc; this suite never silently skips. Looked in: ${workerCandidates.join(', ')}`)
 const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ops-ptc-')))
 ownWindowsFixture(dir)
