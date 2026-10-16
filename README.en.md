@@ -81,6 +81,10 @@ Replace `desktop` with `web` or `tui` as needed. You can also uninstall from the
 
 Old files explicitly provisioned by earlier versions under `<DSH_HOME>/dsh-ops/` need separate cleanup: `npx --yes dsh-ops@latest uninstall --yes`. Persistent state under `~/.fastctx/` is not deleted by default; add `--purge-fastctx` when needed. Disabling the background component waits for in-flight calls, then tries to terminate the component's own remembered tasks on its current connection; failure raises a warning. Old tasks whose ownership was lost on disconnect, and purely demoted tasks, are not guaranteed to be terminated — handle your own tasks first.
 
+## Optional read-only OPS sidebar
+
+Enable the `dsh-ops/tui` row in dsh-TUI and restart to add the OPS sidebar without stealing focus or executing tools. Without `tuiPanels`, only that optional row stays pending. See [Sidebar guide](docs/tui-panel.md).
+
 ## Documentation
 
 - [Usage](docs/usage.md) · [Troubleshooting](docs/troubleshooting.md) · [Component reference](docs/component-reference.md) · [Configuration reference](docs/configuration-reference.md)

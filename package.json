@@ -62,7 +62,10 @@
       "default": "./lib/components/ptc/index.js"
     },
     "./ptc/package.json": "./lib/components/ptc/package.json",
-    "./ptc/locale/*.json": "./lib/components/ptc/locale/*.json"
+    "./ptc/locale/*.json": "./lib/components/ptc/locale/*.json",
+    "./tui": { "default": "./lib/components/tui/index.js" },
+    "./tui/package.json": "./lib/components/tui/package.json",
+    "./tui/locale/*.json": "./lib/components/tui/locale/*.json"
   },
   "bin": {
     "dsh-ops": "bin/dsh-ops.mjs"

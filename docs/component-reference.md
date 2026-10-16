@@ -1,6 +1,6 @@
 # Component reference
 
-What each of the four components publishes, with parameters and permission requirements.
+Component tools, parameters, permissions and optional sidebar.
 
 ---
 
@@ -12,6 +12,7 @@ What each of the four components publishes, with parameters and permission requi
 | `dsh-ops/file` | Faster, higher-performance Rust file retrieval with more concise, token-efficient output | On | Four file tools |
 | `dsh-ops/background` | Managed background tasks for scientific simulations, model training and other long-running processes | Off | Start, read output, list and terminate background jobs |
 | `dsh-ops/ptc` | Independent Rust safe batches and bounded result references, only in pure PTC sessions | Off | `ops_batch`, `ops_result` |
+| `dsh-ops/tui` | Read-only current-session OPS sidebar | Off | None; see [sidebar guide](tui-panel.md) |
 
 ---
 

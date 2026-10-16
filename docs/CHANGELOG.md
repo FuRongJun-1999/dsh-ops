@@ -121,6 +121,10 @@ The capability is taken; the duplicate component is not.
 
 ## [Unreleased]
 
+### Optional dsh-TUI sidebar
+
+- Add disabled-by-default `dsh-ops/tui`, with its own admission manifest and no TUI/React runtime dependency. It observes current-session tool events through a bounded store, uses the host UI kit, and releases its panel and listeners on unload. No tool, prompt, command, polling, profile write or focus change is added.
+
 ### Read-only activity projection
 
 - Add an internal bounded projection of live OPS native/PTC tool events for optional UI consumers. It stores no tool arguments or result bodies, isolates sessions, and labels normal transport returns neutrally rather than claiming business success. Existing components do not enable observation or change their tools.

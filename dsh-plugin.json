@@ -135,6 +135,13 @@
         "entry": "dsh-ops/background",
         "defaultEnabled": false,
         "platforms": ["win32"]
+      },
+      {
+        "id": "dsh-ops-tui",
+        "entry": "dsh-ops/tui",
+        "defaultEnabled": false,
+        "presentation": "Optional read-only dsh-TUI panel API v1",
+        "tools": []
       }
     ]
   },

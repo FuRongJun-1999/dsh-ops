@@ -163,7 +163,7 @@ await test('the card icon is a self-contained PNG with bounded dimensions', () =
 
 await test('the icon and all component entries are shipped in the package whitelist', () => {
   assert.ok(pkg.files.includes('docs/assets/icon.png'))
-  for (const component of ['shell', 'file', 'background', 'ptc']) {
+  for (const component of ['shell', 'file', 'background', 'ptc', 'tui']) {
     const directory = path.join(PACKAGE_ROOT, 'lib', 'components', component)
     assert.ok(fs.existsSync(path.join(directory, 'index.js')))
     assert.ok(pkg.exports[`./${component}`])

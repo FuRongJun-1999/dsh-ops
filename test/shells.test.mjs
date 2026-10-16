@@ -1378,9 +1378,10 @@ await test('the manifest declares the plugin\'s own shell tools as their own nam
 await test('the bundle patch declares independent components, with no persistent pwsh override', () => {
   const entries = patchEntries()
   assert.equal(entries.length, 1)
-  assert.deepEqual(entries[0].insert.map(row => row.id), ['dsh-ops-shell', 'dsh-ops-file', 'dsh-ops-background', 'dsh-ops-ptc'])
+  assert.deepEqual(entries[0].insert.map(row => row.id), ['dsh-ops-shell', 'dsh-ops-file', 'dsh-ops-background', 'dsh-ops-ptc', 'dsh-ops-tui'])
   assert.equal(entries[0].insert[2].disabled, true)
   assert.equal(entries[0].insert[3].disabled, true)
+  assert.equal(entries[0].insert[4].disabled, true)
 })
 
 await test('the shipped dsh-ops row states the documented shell defaults', () => {
