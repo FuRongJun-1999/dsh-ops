@@ -102,8 +102,14 @@ $h = [IO.File]::Open($f,'Open','Read','None')   # no sharing
 ```
 
 Windows will not rename over an open file without `FILE_SHARE_DELETE`; Linux
-will. Check the reported error is a structured `ACCESS_DENIED`, not a raw
-platform string, and that no `.w1e.txt.dsh-ops-<uuid>` debris is left behind.
+will. Check the error is **structured** (`code`, `phase`, `effectState`) rather
+than a raw platform string, and that no `.w1e.txt.dsh-ops-<uuid>` debris is left
+behind.
+
+**Measured on Windows x64 (2026-10-16):** structured, but `code: "IO_ERROR"` with
+`os error 32` (a sharing violation), not `ACCESS_DENIED` as this checklist
+originally said. The distinction is real for a caller that branches on the code, so
+the expectation above is the structured shape, not one specific code.
 
 ### W1g — an uncontended replace must succeed *while the lock is held*
 
@@ -111,8 +117,15 @@ Reported by @Haoming9527 in review of #81: `LockFileEx` denies access to a locke
 range through any other handle, including one the same process opens, and the
 revision check used to re-read the target after taking the lock. On Linux this is
 invisible (`flock` is per open file description), so only a Windows host can
-answer it. The worker now reads the current bytes **through the lock handle**, so
-nothing reopens the target between the check and the publish.
+answer it.
+
+**Measured on Windows x64 (2026-10-16): pass.** The single uncontended replace
+reports `completed` with `changed: 1`, the file reads `one three`, and no debris is
+left. In the report's revision every losing writer got `IO_ERROR` + `os error 33`
+(`ERROR_LOCK_VIOLATION`) instead of `REVISION_CONFLICT`, and 2 of 6 in-flight
+`ops_inspect_local_file` calls on the same file were refused, because that revision
+locked the *target* — and on Windows byte-range locks are mandatory, so the lock
+refused reads too. The lock no longer touches the target (W1h).
 
 ```powershell
 $f = "$env:TEMP\w1g.txt"; "one two" | Set-Content -NoNewline $f
@@ -120,11 +133,38 @@ $f = "$env:TEMP\w1g.txt"; "one two" | Set-Content -NoNewline $f
 # uncontended replace, with no other process holding the file.
 ```
 
-Check: the call reports `completed` with `changed: 1` (a lock violation here would
-mean the target is being reopened while locked), the file reads `one three`, no
-`.w1g.txt.dsh-ops-<uuid>` debris remains, and a *second* writer run against the
-same file while the first is mid-call still receives `REVISION_CONFLICT` rather
-than reporting a change that did not survive.
+Check: `completed` with `changed: 1`, the file reads `one three`, no
+`.w1g.txt.dsh-ops-<uuid>` debris, a `.dsh-ops-update-<64 hex>.lock` sidecar appears
+**beside it** (see W1h) — and, with two writers racing the same file, exactly one
+reports a change while the losers each receive a structured `REVISION_CONFLICT`,
+not a bare `IO_ERROR`.
+
+### W1h — the update lock must not block readers
+
+The lock is taken on a **stable sidecar beside the target**, never on the target:
+`.dsh-ops-update-<sha256 of the target's name>.lock` in the target's directory,
+created on first use and never unlinked. It must be stable because publication is
+an atomic rename: a waiter that locked the target's inode would be holding the
+*old* inode while the path already names a new one, so the next writer would lock a
+different object under the same name. It must be off-target because a byte-range
+lock on the file being replaced is mandatory on Windows and refuses *reads* of it
+through every other handle — that is what the report measured. POSIX reaches the
+same serialisation with `flock` on the sidecar, which is advisory and needs no
+artifact at all.
+
+```powershell
+$f = "$env:TEMP\w1h.txt"; "one two" | Set-Content -NoNewline $f
+# start a replace of a large file in this directory, and read another file in the
+# SAME directory (or the target itself) while it is in flight:
+#   ops_inspect_local_file { path: $f }
+```
+
+Check: the reader answers normally (no `os error 33`); the sidecar
+`.dsh-ops-update-<64 hex>.lock` exists next to the target; and neither `ops_glob`
+nor `ops_grep` nor a directory-wide `ops_replace` ever reports it as one of its
+files (it is a dotfile, so the walker's hidden-component rule already keeps it out —
+asserted by `linux-args.test.mjs` on every platform, and by the sweep, which only
+reclaims `.<target>.dsh-ops-<uuid v4>` names and so cannot touch it).
 
 ### W1f — alternate data streams and mark-of-the-web
 
@@ -139,6 +179,20 @@ Get-Item -Stream * $f
 
 ---
 
+### A DSH sandbox cannot answer this checklist
+
+Measured on Windows x64 (2026-10-16): inside the agent sandbox the two contexts are
+complementary halves of "cannot run the gate". Under `workspace-write`, Node cannot
+spawn the worker at all (`spawnError: "spawn EPERM"`), so every worker-driven suite
+crashes. Under `danger-full-access`, the worker's own atomic create is refused
+(`ACCESS_DENIED … Atomic replacement create: os error 5`), so every check that
+*writes* through it fails while reads are fine. Neither run may be read as a verdict
+on the branch, and neither may be reported as a pass. Drive the worker directly
+instead — from PowerShell, piping the request JSON into the worker's stdin, which
+the verification above did — or run the gate on a normal Windows host.
+
+---
+
 ## W2 — the release gate must actually *run* on Windows, not skip
 
 `bin/check-release.mjs` now derives its scope from `package.json` `os` x `cpu`,
@@ -148,7 +202,7 @@ Windows Bash IPC payload **only when `win32-x64` is staged**. On Linux only the
 
 | Command | Expected on a Windows host with `runtime/win32-x64` staged |
 | --- | --- |
-| `npm run verify:release` | EXIT=0; 58 manifest checks; **the IPC closure RUNS** (no "skipped" note); `Release closure OK: dsh-ops@0.3.1, win32-x64 worker (...)` |
+| `npm run verify:release` | EXIT=0; **61** manifest checks; **the IPC closure RUNS** (no "skipped" note); `Release closure OK: dsh-ops@0.3.1, win32-x64 worker + Bash IPC proxies + matching source.` (measured 2026-10-16, after `npm run build:bash-ipc`) |
 | `node bin/native-runtime.mjs check` | Validates the **declared** targets. On this branch `package.json` declares `win32` + `linux`, so a Windows-only checkout will refuse unless `runtime/linux-x64` is also staged. See the diagnostic note below. |
 | `node bin/native-runtime.mjs check --staged` | Validates only what is under `runtime/`; on a Windows-only staging that is `win32-x64`, EXIT=0 |
 | `DSH_OPS_REQUIRE_ALL_TARGETS=1 node bin/check-release.mjs` | Refuses on a Windows-only staging, naming `linux-x64` |
@@ -156,13 +210,23 @@ Windows Bash IPC payload **only when `win32-x64` is staged**. On Linux only the
 | `node bin/native-runtime.mjs stage --platform win32-x64 --staged` | Refused: `--staged only applies to check; stage always names its targets` |
 | `node bin/native-runtime.mjs check --platform bogus-x64` | Refused: `Unsupported target` |
 
+Building the branch on Windows needs three things beyond a plain checkout, all
+measured on 2026-10-16: the branch carries no `runtime/` payload, so everything is
+built locally (`npm run build:ptc`, and `npm run build:bash-ipc`, which needs
+`vswhere` and a Visual Studio toolchain); the Rust dependency set has to come from a
+vendored/local registry; and `CARGO_HOME` plus the target directory must sit on an
+**ASCII** path, because mingw's `gcc` driver drops non-ASCII paths. `native/src/lib.rs`
+`sync_directory` is POSIX-only and used to warn as dead code on the Windows target;
+that is fixed.
+
 Also confirm the **PE path** by hand, because only a synthetic fixture was
-exercised on Linux: read the first 64 bytes of `runtime/win32-x64/dsh-ops-worker`,
-check `MZ`, that `e_lfanew` at offset `0x3c` points at a `PE\0\0` signature, and
-that the COFF machine field is `0x8664`.
+exercised on Linux: read the first 64 bytes of `runtime/win32-x64/dsh-ops-worker.exe`
+(the `.exe` matters — this line omitted it and the command failed with `EXIT=1`,
+measured 2026-10-16), check `MZ`, that `e_lfanew` at offset `0x3c` points at a
+`PE\0\0` signature, and that the COFF machine field is `0x8664`.
 
 ```powershell
-node -e "const b=require('fs').readFileSync('runtime/win32-x64/dsh-ops-worker');console.log(b.slice(0,2).toString(),b.readUInt32LE(0x3c).toString(16),b.slice(b.readUInt32LE(0x3c),b.readUInt32LE(0x3c)+4).toString(),b.readUInt16LE(b.readUInt32LE(0x3c)+4).toString(16))"
+node -e "const b=require('fs').readFileSync('runtime/win32-x64/dsh-ops-worker.exe');console.log(b.slice(0,2).toString(),b.readUInt32LE(0x3c).toString(16),b.slice(b.readUInt32LE(0x3c),b.readUInt32LE(0x3c)+4).toString(),b.readUInt16LE(b.readUInt32LE(0x3c)+4).toString(16))"
 ```
 
 ### Diagnostic gap — fixed
@@ -204,7 +268,7 @@ a Linux-only reason — but that reasoning is untested on a real Windows host.
 ```powershell
 npm run verify            # expect: the platform suite set to pass (Linux: 30 with a runtime, 28 + 2 skips without one)
 
-npm run validate:manifest # expect: all 58 checks passed
+npm run validate:manifest # expect: all 61 checks passed
 ```
 
 | Suite | Expected on win32 |
@@ -213,6 +277,7 @@ npm run validate:manifest # expect: all 58 checks passed
 | `output-budget.test.mjs` | Runs fully (byte accounting, platform-neutral) |
 | `grep-multiline.test.mjs` | Runs fully (pattern matching, platform-neutral) |
 | `replace-concurrency.test.mjs` | Must pass, but the outcome depends on Windows lock semantics — see the update-lock note below |
+
 | `file-metadata.test.mjs` | **Skips as a whole** (`skipSuite`, exit 77) because mode bits, POSIX ACLs and `user.*` xattrs are POSIX concepts. Windows carries a DACL; that is W1's question, not this suite's |
 | `linux-args.test.mjs` | Runs fully (platform-neutral) |
 | `linux-protocol.test.mjs` | Runs fully (platform-neutral) |
@@ -221,8 +286,14 @@ npm run validate:manifest # expect: all 58 checks passed
 | `linux-sandbox.test.mjs` | Containment cases run; symlink refusal, `/dev/null`, `/dev/zero`, `/proc/self/status`, FIFO, unix socket and the `0555` directory are guarded |
 | `linux-attributes.test.mjs` | **Skips as a whole** (`skipSuite`, exit 77) because `nlink`/`blocks`/mode/rename-over-inode are POSIX-only |
 
-Two suites skip as a whole (`file-metadata` and `linux-attributes`), so a Windows
-run must report **2 skipped** — never a pass, never a failure.
+Three suites skip on a Windows host and none of them is a pass: `file-metadata`
+and `linux-attributes` (POSIX-only) and `linux-shell` (the POSIX bash rung's own
+suite, skipped where no POSIX bash is discoverable). **Measured on Windows x64
+(2026-10-16), in a `danger-full-access` sandbox: 30 suites, 3 skipped.** This
+checklist originally said "exactly 2", which counted only the two POSIX-only
+suites. A plain Windows host outside a DSH sandbox should show no failures; the
+sandbox itself cannot run the gate at all — see "A DSH sandbox cannot answer this
+checklist" above.
 
 Verify the skip path is honest, and that `DSH_OPS_REQUIRE_RUNTIME=1` turns it
 into a failure rather than a green run:
@@ -250,7 +321,7 @@ by the fix plan.
 
 | Item | Repro | Expected (current behaviour) |
 | --- | --- | --- |
-| **L2** hex view drops the first 16 bytes — **fixed** | 8-byte file + `ops_inspect_local_file {view:"hex"}` with no offset | `items[0].text == "deadbeef00112233"`, `bytesTotal: 8`, `complete: true`, and `skipped: 0` |
+| **L2** hex view drops the first 16 bytes — **fixed** | 8-byte file + `ops_inspect_local_file {view:"hex"}` with no offset | `items[0].text == "de ad be ef 00 11 22 33"` (the hex view is space-separated; this line used to show it unspaced), `bytesTotal: 8`, `complete: true`, and `skipped: 0` |
 | **L3** default `maxReplacements` is a reject threshold — **fixed (message only)** | 101 matches, no explicit `maxReplacements` | still refused with `OUTPUT_LIMIT` and **no file changed**, but the message now names the 101 matches, the 100 ceiling and how to proceed. The ceiling is deliberate; only the message blamed the pattern |
 | **L4** `limit` bounds lines, not bytes — **fixed** | a file whose single line is 200 KB | the read completes with `truncated: true`, `items[0].truncatedInLine: true` and `bytesTotal`, still under the host's `stdout: { maxBytes: 128 * 1024 }`; the worker's own ceiling is 96 KiB |
 | **L5** `replace` pattern is a literal substring — **fixed (description only)** | `pattern:"a.c"` against text `abc` | still no match: that is the design. The `pattern` field now states that it is a literal in `replace` and a regex in `grep`, which is what the two tools disagreed about |
@@ -258,23 +329,23 @@ by the fix plan.
 | **L7** hard kill leaves hidden debris — **bounded** | SIGKILL `ops_replace` during publication | one `.<name>.dsh-ops-<uuid>` file may remain until the next write of that same file, which reclaims it. A `SIGKILL` runs no cleanup path, so that is the tightest bound available without a journal |
 | **L8** sparse files are materialised | 16 MiB sparse hole | 16 MiB of real allocation |
 | **L12** exec bit is not validated — **fixed** | a 0644 worker binary | refused at resolve time by path and mode, `not executable (mode 0644)`. POSIX-only: Windows has no execute bit, so a Windows run cannot show this row |
-| **L14** concurrent replaces lose an update — **fixed** | 6 simultaneous `ops_replace` on one file | exactly one call reports a change and its replacement is the one in the file; the others refuse with `REVISION_CONFLICT` or report `changed: 0` |
+| **L14** concurrent replaces lose an update — **fixed** | 6 simultaneous `ops_replace` on one file | exactly one call reports a change and its replacement is the one in the file; the others refuse with a structured `REVISION_CONFLICT` (the report measured a bare `IO_ERROR` + `os error 33` in the target-locking revision; the sidecar lock maps the loss to `REVISION_CONFLICT`, see W1h) |
 
 ### The update lock on Windows — a new data point, please
 
-The L14 fix takes an exclusive advisory lock on the target before re-checking the
-revision and publishing. On Linux that is `flock`, which is advisory: a process
-that never locks is unaffected. On Windows `fs2` reaches for `LockFileEx`, and
-byte-range locks there are **mandatory** — a concurrent read of the locked range
-by another process can fail with `ERROR_LOCK_VIOLATION` instead of waiting.
+The L14 fix takes an exclusive advisory lock on a stable sidecar next to the
+target — never on the target itself — before re-checking the revision and
+publishing (W1h). On Linux that is `flock`, which is advisory: a process that never
+locks is unaffected. On Windows `fs2` reaches for `LockFileEx`, and byte-range locks
+there are **mandatory**, which is exactly why the sidecar has to be off-target.
 
 Two questions, both answered by `npm run verify`:
 
 1. Does `replace-concurrency` pass — does exactly one writer win, with every other
-   call refusing or reporting `changed: 0`?
+   call refusing with `REVISION_CONFLICT` (or reporting `changed: 0`)?
 2. While one process holds the lock, does a plain `ops_inspect_local_file` on the
-   same file still succeed? If reads are refused, the lock needs narrowing (a
-   dedicated lock file, or a per-directory lock) before this ships on Windows.
+   same file still succeed? The report answered **no** for the target-locking
+   revision, 2 of 6 in-flight reads refused. Re-answer it here for the sidecar.
 
 The `replace` path itself is exercised by `linux-args.test.mjs` on every platform,
 so a Windows failure here is specific to the lock.

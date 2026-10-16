@@ -157,6 +157,33 @@ fix; see that entry for the `PSModulePath` scope note.
   the path it was given, and that path's ancestors, for reparse points, rather than comparing the
   given path with its resolved form: a short name changes one into the other with no link involved.
 
+### Windows verification follow-ups: the CLI probe and the checklist
+
+A Windows x64 verification of the 0.3.1 boundary work (2026-10-16) closed most of its own
+findings in the release itself — the update lock no longer touches the target, credential
+directory names are matched case-insensitively on every host, and `sync_directory` is
+`#[cfg(unix)]`. Three things it measured were still true here.
+
+- **A `.cmd` candidate was probed with `CreateProcess`.** The desktop CLI is a launcher
+  script (`.../runtime/cli/bin/dsh.cmd`), which `CreateProcess` refuses with `EINVAL`, so
+  "does the installed copy run?" answered about the wrapper's file type instead of about the
+  program — and a perfectly good install was reported as not running. A `.cmd`/`.bat` is now
+  probed the way it is launched, through `%ComSpec%`, and a path carrying `cmd.exe`
+  metacharacters is refused by name rather than interpolated into a command line.
+- **`docs/windows-verification.md` carried expectations the report disproved.** The manifest
+  count is 61, not 58; the PE path needs its `.exe`; the L2 hex text is space-separated; a
+  Windows host skips three suites rather than two (`linux-shell` joins the two POSIX-only
+  ones); W1e's measured code is `IO_ERROR` (os error 32), not `ACCESS_DENIED`, so the
+  expectation is the structured *shape* rather than one code; and the update-lock note now
+  describes the sidecar, which is what the code takes. The note that a DSH sandbox cannot
+  answer the checklist at all — `workspace-write` cannot spawn the worker, `danger-full-access`
+  cannot let it create its replacement — and the Windows build prerequisites are recorded with
+  it.
+- **The lock sidecar is asserted invisible.** `test/linux-args.test.mjs` plants a
+  `.dsh-ops-update-<hex>.lock` and checks that `glob`, `grep` and a directory-wide `replace`
+  never select or edit it — on every host, because the rule that keeps it out is
+  platform-independent.
+
 ## [0.3.0] — 2026-10-14 — Windows x64 native tools and PTC
 
 Release scope: **Windows x64 only**, targeting DSH 0.2.0-rc.2. macOS arm64 is

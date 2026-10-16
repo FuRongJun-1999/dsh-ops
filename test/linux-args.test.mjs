@@ -291,4 +291,29 @@ await test('bounded hostile input stays bounded: a huge grep pattern and a 128 K
   })
 })
 
+await test('the update lock file is invisible to a walk, a grep and a replace plan', async () => {
+  // `ops_replace` serialises writers on a stable sidecar beside the target
+  // (`.dsh-ops-update-<sha256 of the name>.lock`, never the target itself), so that artifact has to
+  // stay out of every selection the file tools make: a directory-wide `replace` must not rewrite it
+  // and a `glob` must not report it as a result. The walker's hidden-component rule is what keeps it
+  // out, and that rule is platform-independent, so this is asserted on every host rather than only
+  // where the sidecar is actually created.
+  await withTempDir('lock-artifact', async workspace => {
+    const sidecar = '.dsh-ops-update-1f0a6b5cd0d2b3a495e2c41a5f1b7ee2d9a4c8f6b0e3a1d7c5f2b8e6a3d9c4f1.lock'
+    fs.writeFileSync(path.join(workspace, 'notes.txt'), 'one TOKEN two\n')
+    fs.writeFileSync(path.join(workspace, sidecar), '')
+
+    const globbed = envelopeOf(await callTool('glob', { path: workspace, pattern: ['**/*'] }, { root: workspace }), assert)
+    assert.equal(globbed.items.some(item => String(item).includes('dsh-ops-update-')), false, JSON.stringify(globbed.items))
+
+    const grepped = envelopeOf(await callTool('grep', { path: workspace, pattern: 'TOKEN' }, { root: workspace }), assert)
+    assert.equal(grepped.items.some(item => String(item.path).includes('dsh-ops-update-')), false, JSON.stringify(grepped.items))
+
+    const replaced = envelopeOf(await callTool('replace', { path: workspace, pattern: 'TOKEN', replacement: 'DONE' }, { root: workspace }), assert)
+    assert.equal(replaced.changed, 1)
+    assert.deepEqual(replaced.items.map(item => path.basename(item.path)), ['notes.txt'])
+    assert.equal(fs.readFileSync(path.join(workspace, sidecar), 'utf8'), '', 'the lock sidecar must not be edited')
+  })
+})
+
 report('linux-args')
