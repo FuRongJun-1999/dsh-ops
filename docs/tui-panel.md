@@ -32,6 +32,21 @@ This is not history replay or persistent accounting. Closing/reopening the tab p
 
 Shell prose and spilled/truncated content cannot reliably establish business status and remain business-unconfirmed, never success. Only a single JSON text of at most 64 KiB is parsed; fixed categories, counters, booleans and a bounded error code are retained, not error messages.
 
+## Read-only filters and local pages
+
+With the OPS panel focused:
+
+| Key | Action |
+| --- | --- |
+| `f` | Cycle all rows → running → anomalies; reset to page one |
+| `n` / PageDown | Next retained-metadata page |
+| `p` / PageUp | Previous retained-metadata page |
+| `a` | Acknowledge all-session notifications only |
+
+Esc and left/right panel-switch arrows remain the host's; chat typing and modified shortcuts are not intercepted. The footer shows the filter, current page/page count and filtered retained-row count. Header statistics stay cumulative and unfiltered. The anomaly filter shows **only the selected session's retained anomalies**, not the all-session notification ledger. Acknowledging notifications does not remove rows.
+
+Pages use only the bounded in-memory active/recent rows. They never execute tools, read session history, fetch `ops_result` pages or expand omitted result bodies. Long diagnostics continue on following pages with their tool name. Live settlements and retention eviction can move rows between pages; this is a live view, not a stable archive. Resize clamps the selected page; session changes and panel remount reset the local filter/page. Very short panels may only fit the summary: enlarge the panel to browse details.
+
 ## Aggregate anomaly alerts
 
 The OPS tab uses the public badge API for newly observed refusals/partial failures (warning) and operation/transport errors or explicit unknown effects (error). Normal returns, previews and business-unconfirmed prose do not create alerts. Duplicate events do not inflate them. Observation continues while the panel is hidden; alerts never open the tab or move focus.
@@ -55,11 +70,11 @@ These bound observer memory, not tool execution. At active capacity, new calls a
 ## Verification
 
 ```console
-node test/run.mjs tui-activity tui-panel tui-result tui-attention manifest
+node test/run.mjs tui-activity tui-panel tui-result tui-attention tui-navigation manifest
 DSH_OPS_TUI_ROOT=/path/to/dsh-TUI DSH_OPS_REQUIRE_TUI=1 node test/run.mjs tui-host
 ```
 
-The optional host suite resolves React/Cordis/rendering dependencies from the same TUI checkout or built package and isolates HOME/USERPROFILE/DSH_HOME before importing it. It tests real Loader admission, the exported OPS subpath, inline/fullscreen rendering at panel widths 28/38, session switching and unload. Tool events are synthetic: this is not native Windows, OS sandbox or manual PTY acceptance. Without the root variable the suite is counted as skipped, never passed; `DSH_OPS_REQUIRE_TUI=1` makes a missing root fail.
+The optional host suite resolves React/Cordis/rendering dependencies from the same TUI checkout or built package and isolates HOME/USERPROFILE/DSH_HOME before importing it. It tests real Loader admission, the exported OPS subpath, inline/fullscreen rendering at panel widths 28/38, session switching, focused navigation/acknowledgement, local repagination on resize/live settlement and unload. Tool events are synthetic: this is not native Windows, OS sandbox or manual PTY acceptance. Without the root variable the suite is counted as skipped, never passed; `DSH_OPS_REQUIRE_TUI=1` makes a missing root fail. Add `DSH_OPS_TUI_BUILT=1` to use `lib/types` in a compiled checkout. The target must resolve its test/peer dependencies; a production profile whose peers are supplied by the DSH launcher is not a standalone test root. Do not install test dependencies into a live profile to satisfy this suite.
 
 ### Real source-worker integration
 

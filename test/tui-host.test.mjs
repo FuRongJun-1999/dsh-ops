@@ -99,6 +99,81 @@ try {
       } finally { await app.unmount(); term.dispose() }
     })
   }
+  for (const fullscreen of [false, true]) await test('focused filters, local pages, resize and unmount: ' + (fullscreen ? 'fullscreen zh' : 'inline en'), async () => {
+    setLang(fullscreen ? 'zh' : 'en')
+    const words = fullscreen ? { all: '全部记录', running: '运行中', anomalies: '异常记录', kept: '保留', calls: '调用', returned: '已返回' }
+      : { all: 'All rows', running: 'Running', anomalies: 'Anomalies', kept: 'kept', calls: 'Calls', returned: 'Returned' }
+    const runtime = createInputRuntime(), key = 'navigation-' + fullscreen
+    let sessionId = key, show = true, height = 16, observedEvents = 0
+    const off = root.on('session/event', session => { if (session.id === key) observedEvents++ })
+    for (let index = 0; index < 6; index++) {
+      root.emit('session/event', { id: key }, call(index * 2 + 1, 'nav-' + index, 'ops_replace'))
+      root.emit('session/event', { id: key }, result(index * 2 + 2, 'nav-' + index, { status: 'rejected', error: { code: 'NAV_' + index } }))
+    }
+    root.emit('session/event', { id: key }, call(13, 'nav-running', 'ops_glob'))
+    const term = new Terminal({ cols: 48, rows: 18, scrollback: 100, allowProposedApi: true })
+    class Output extends Writable { columns = 48; rows = 18; isTTY = true; _write(chunk, _encoding, done) { term.write(String(chunk), done) } }
+    class Input extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
+    const screen = () => Array.from({ length: 18 }, (_, y) => term.buffer.active.getLine(term.buffer.active.baseY + y)?.translateToString(true) ?? '').join('\n')
+    const controller = { enabledPanelIds: [id], activePanelId: id, focus: 'chat', zoom: false, runtime }
+    const tree = () => {
+      const channel = { sessionId, version: observedEvents, cwd: TEST_HOME, working: false, spinnerMode: 'idle', todos: [], subagents: [], backgroundJobs: [], rows: [], notify() {}, subscribe() { return () => {} } }
+      const body = React.createElement(ui.ThemeProvider, { theme: 'dark' }, React.createElement(ui.Box, null,
+        React.createElement(ui.Box, { width: 18 }, React.createElement(ui.Text, null, 'chat-ok')),
+        show ? React.createElement(PanelHost, { controller, channel, width: 28, height }) : null))
+      return fullscreen ? React.createElement(ui.AlternateScreen, null, body) : body
+    }
+    const footer = (filter, page, count) => filter + ' · ' + page + ' · ' + words.kept + ' ' + count
+    const app = await ui.render(tree(), { stdout: new Output(), stdin: new Input(), stderr: new Writable({ write(_chunk, _encoding, done) { done() } }), patchConsole: false, exitOnCtrlC: false })
+    try {
+      await waitFor(() => screen().includes(footer(words.all, '1/2', 4)), { what: 'bounded all-row first page' })
+      assert.equal(runtime.dispatchKey(id, 'f'), false, 'chat typing must not change filters')
+      controller.focus = 'panel'; app.rerender(tree())
+      await waitFor(() => runtime.isEnabled(id), { what: 'focused navigation handler' })
+      for (const flag of ['escape', 'leftArrow', 'rightArrow']) assert.equal(runtime.dispatchKey(id, '', { [flag]: true }), false)
+      assert.equal(runtime.dispatchKey(id, 'f', { ctrl: true }), false)
+      assert.equal(runtime.dispatchKey(id, 'n'), true)
+      await waitFor(() => screen().includes(footer(words.all, '2/2', 4)) && screen().includes('NAV_3'), { what: 'next retained page' })
+      assert.equal(runtime.dispatchKey(id, 'p'), true)
+      await waitFor(() => screen().includes(footer(words.all, '1/2', 4)), { what: 'previous retained page' })
+      assert.equal(runtime.dispatchKey(id, '', { pageDown: true }), true)
+      await waitFor(() => screen().includes(footer(words.all, '2/2', 4)), { what: 'PageDown navigation' })
+      assert.equal(runtime.dispatchKey(id, '', { pageUp: true }), true)
+      await waitFor(() => screen().includes(footer(words.all, '1/2', 4)), { what: 'PageUp navigation' })
+      runtime.dispatchKey(id, 'n')
+      await waitFor(() => screen().includes(footer(words.all, '2/2', 4)), { what: 'page before filter reset' })
+      assert.equal(runtime.dispatchKey(id, 'f'), true)
+      await waitFor(() => screen().includes(footer(words.running, '1/1', 1)), { what: 'running-only filter resets page' })
+      assert.equal(screen().includes('NAV_'), false)
+      assert.equal(runtime.dispatchKey(id, 'f'), true)
+      await waitFor(() => screen().includes(footer(words.anomalies, '1/2', 3)), { what: 'retained anomaly filter' })
+      assert.equal(screen().includes('ops_glob'), false)
+      sessionId = key + '-other'; app.rerender(tree())
+      await waitFor(() => screen().includes(footer(words.all, '1/1', 0)), { what: 'session change resets local navigation' })
+      sessionId = key; app.rerender(tree())
+      await waitFor(() => screen().includes(footer(words.all, '1/2', 4)), { what: 'restored session starts at all rows' })
+      runtime.dispatchKey(id, 'n')
+      await waitFor(() => screen().includes(footer(words.all, '2/2', 4)), { what: 'last live page before settlement' })
+      root.emit('session/event', { id: key }, result(14, 'nav-running', { status: 'completed' }))
+      await waitFor(() => screen().includes(footer(words.all, '1/1', 3)) && screen().includes(words.returned + ' 7'), { what: 'live settlement clamps page and evicts oldest retained result' })
+      assert.equal(screen().includes('NAV_3'), false)
+      height = 12; app.rerender(tree())
+      await waitFor(() => screen().includes(footer(words.all, '1/3', 3)), { what: 'shorter viewport repaginates locally' })
+      runtime.dispatchKey(id, 'n')
+      await waitFor(() => screen().includes(footer(words.all, '2/3', 3)), { what: 'smaller viewport second page' })
+      height = 16; app.rerender(tree())
+      await waitFor(() => screen().includes(footer(words.all, '1/1', 3)), { what: 'larger viewport clamps stale page' })
+      runtime.dispatchKey(id, 'f')
+      await waitFor(() => screen().includes(footer(words.running, '1/1', 0)), { what: 'empty retained filter' })
+      show = false; app.rerender(tree())
+      await waitFor(() => runtime.size() === 0 && !screen().includes(words.calls), { what: 'unmount releases all key handlers' })
+      show = true; app.rerender(tree())
+      await waitFor(() => screen().includes(footer(words.all, '1/1', 3)) && runtime.isEnabled(id), { what: 'remount resets local view, not observation' })
+      runtime.dispatchKey(id, 'a')
+      assert.equal(observedEvents, 14, 'navigation must not append events or execute tools')
+      assert.equal(root.get('tools', false), undefined)
+    } finally { off(); await app.unmount(); term.dispose(); assert.equal(runtime.size(), 0) }
+  })
   await test('real activation unload removes its panel and event observer', async () => {
     if (entry) await entry.fiber.dispose()
     await waitFor(() => panelStore.get(id) === undefined, { what: 'OPS panel disposal' })

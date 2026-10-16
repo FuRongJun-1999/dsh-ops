@@ -32,6 +32,21 @@ config:
 
 Shell 输出或被 spill/截断的内容无法可靠恢复业务状态，会保持「业务状态未确认」，不会假报成功。只解析最多 64 KiB 的单条 JSON 文本，且只保留固定类别、计数、布尔值和有界错误码，不保留错误正文。
 
+## 只读筛选与本地分页
+
+聚焦 OPS 面板后：
+
+| 按键 | 动作 |
+| --- | --- |
+| `f` | 全部记录 → 运行中 → 异常记录循环；回到第一页 |
+| `n` / PageDown | 下一页保留元数据 |
+| `p` / PageUp | 上一页保留元数据 |
+| `a` | 仅确认所有会话的汇总通知 |
+
+Esc 与左右切面板键仍交给宿主；不拦截聊天输入或带修饰键的快捷键。页脚显示筛选、当前页/页数和筛选后的保留条数，顶部统计保持未筛选的累计值。异常筛选**只显示当前会话仍保留的异常记录**，不是跨会话通知清单；确认通知不会移除记录。
+
+分页只操作有界内存中的进行中/最近记录，不执行工具、不读会话历史、不读取 `ops_result` 分页，也不展开省略的结果正文。长诊断在后页带工具名称续显。新结算与保留淘汰会改变页面内容：这是实时视图，不是固定档案。尺寸变化会钳制页码；会话切换或面板重新挂载会重置本地筛选/页码。面板太矮时可能仅能显示概况，放大后再浏览明细。
+
 ## 汇总异常提醒
 
 OPS 标签通过公开徽标 API 提醒新观察到的拒绝/部分失败（warning）、业务/执行错误或明确未知副作用（error）。普通返回、预览和业务状态未确认的文本不触发提醒，重复事件不累计。面板隐藏时继续观测，提醒不自动打开面板、不抢焦点。
@@ -55,11 +70,11 @@ TUI 行只接受以下键：
 ## 验证
 
 ```console
-node test/run.mjs tui-activity tui-panel tui-result tui-attention manifest
+node test/run.mjs tui-activity tui-panel tui-result tui-attention tui-navigation manifest
 DSH_OPS_TUI_ROOT=/path/to/dsh-TUI DSH_OPS_REQUIRE_TUI=1 node test/run.mjs tui-host
 ```
 
-可选宿主用例从同一个 TUI 检出或构建包解析 React/Cordis/渲染依赖，在任何 TUI 导入前隔离 HOME/USERPROFILE/DSH_HOME，验证真实 Loader 准入、OPS 导出子路径、inline/fullscreen 的 28/38 列面板、会话切换和卸载。工具事件是合成数据，不等于 Windows 原生执行、OS 沙箱或真实 PTY 手工验收。未设置路径时明确记为跳过；`DSH_OPS_REQUIRE_TUI=1` 使缺少路径成为失败。
+可选宿主用例从同一个 TUI 检出或构建包解析 React/Cordis/渲染依赖，在任何 TUI 导入前隔离 HOME/USERPROFILE/DSH_HOME，验证真实 Loader 准入、OPS 导出子路径、inline/fullscreen 的 28/38 列面板、会话切换、聚焦态导航/确认、尺寸变化与新结算后的本地重分页和卸载。工具事件是合成数据，不等于 Windows 原生执行、OS 沙箱或真实 PTY 手工验收。未设置路径时明确记为跳过；`DSH_OPS_REQUIRE_TUI=1` 使缺少路径成为失败。加上 `DSH_OPS_TUI_BUILT=1` 可在已编译的检出中使用 `lib/types`。测试目标必须能解析自身测试/peer 依赖；peer 由 DSH 启动器供应的生产 profile 不是独立测试根，不要为此向现用 profile 安装测试依赖。
 
 ### 真实源码 worker 联调
 

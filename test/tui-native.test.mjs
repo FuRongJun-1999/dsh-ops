@@ -23,7 +23,7 @@ assert.equal(version.status, 0, version.stderr)
 const packageVersion = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')).version
 assert.equal(version.stdout.trim(), 'dsh-ops-worker ' + packageVersion)
 const { Context, Loader, React, Terminal, hostRow, TuiPanelRuntime, armAdmissionLoader,
-  panelStore, PanelHost, ui, runtimeModule, unregister } = await import('./lib/tui-host.mjs')
+  panelStore, PanelHost, ui, runtimeModule, unregister, createInputRuntime } = await import('./lib/tui-host.mjs')
 const [Agents, Sessions, Projections, Prompt, Tools, Loop] = await Promise.all([
   'dsh-agent', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent-loop',
 ].map(name => runtimeModule('@deepseek-ai/' + name).then(module => module.default)))
@@ -41,8 +41,8 @@ const scripts = new Map(), events = [], failures = [], modes = new Map()
 let modelCalls = 0, native, app, term, sessionId = 'native-fixture', showPanel = true
 const channel = () => ({ sessionId, version: events.length, cwd: workspace, working: false, spinnerMode: 'idle',
   todos: [], subagents: [], backgroundJobs: [], rows: [], notify() {}, subscribe() { return () => {} } })
-const controller = { enabledPanelIds: [id], activePanelId: id, focus: 'chat', zoom: false,
-  runtime: { registerInput: () => () => {}, dispatchKey: () => false } }
+const runtime = createInputRuntime()
+const controller = { enabledPanelIds: [id], activePanelId: id, focus: 'chat', zoom: false, runtime }
 const tree = () => React.createElement(ui.ThemeProvider, { theme: 'dark' }, React.createElement(ui.Box, null,
   React.createElement(ui.Box, { width: 10 }, React.createElement(ui.Text, null, 'chat-ok')),
   showPanel ? React.createElement(PanelHost, { controller, channel: channel(), width: 38, height: 22 }) : null))
@@ -146,6 +146,13 @@ try {
     showPanel = true; app.rerender(tree())
     await waitFor(() => screen().includes('Returned ' + (returned + 1)), { what: 'real call while panel unmounted' })
     const settled = events.length
+    controller.focus = 'panel'; app.rerender(tree())
+    await waitFor(() => runtime.isEnabled(id), { what: 'real-worker panel navigation focus' })
+    runtime.dispatchKey(id, 'f')
+    await waitFor(() => screen().includes('Running · 1/1 · kept 0'), { what: 'real-worker running filter' })
+    runtime.dispatchKey(id, 'f')
+    await waitFor(() => screen().includes('Anomalies · 1/1 · kept 0'), { what: 'real-worker retained anomaly filter' })
+    runtime.dispatchKey(id, 'n'); runtime.dispatchKey(id, 'p')
     app.rerender(tree()); await tick()
     assert.ok(settled > count); assert.equal(events.length, settled); assert.equal(modelCalls, requests + 2)
     assert.equal(JSON.stringify(observed.snapshot(agent.id)).includes('PRIVATE_'), false)

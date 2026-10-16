@@ -83,7 +83,7 @@ Old files explicitly provisioned by earlier versions under `<DSH_HOME>/dsh-ops/`
 
 ## Optional read-only OPS sidebar
 
-Enable the `dsh-ops/tui` row in dsh-TUI and restart to add the OPS sidebar without stealing focus or executing tools. Without `tuiPanels`, only that optional row stays pending. See [Sidebar guide](docs/tui-panel.md).
+Enable the `dsh-ops/tui` row in dsh-TUI and restart to add the OPS sidebar without stealing focus or executing tools. Without `tuiPanels`, only that optional row stays pending. See [Sidebar guide](docs/tui-panel.md). While focused, use `f` to filter, `n`/`p` for local pages and `a` to acknowledge all-session alerts; only bounded retained metadata is browsed, never fetched result pages.
 
 ## Documentation
 

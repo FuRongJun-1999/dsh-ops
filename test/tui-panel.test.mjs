@@ -23,7 +23,7 @@ class Panels extends Service {
 const newRoot = () => { const ctx = new Context(); ctx.logger.level = 0; return ctx }
 const readPanel = (descriptor, sessionId = 'one', lang = 'en') => {
   let snapshot
-  const React = { useEffect() {}, useSyncExternalStore(_subscribe, get) { const value = get(); if ('total' in value) snapshot = value; return value }, createElement() { return null } }
+  const React = { useState: value => [value, () => {}], useEffect() {}, useSyncExternalStore(_subscribe, get) { const value = get(); if ('total' in value) snapshot = value; return value }, createElement() { return null } }
   descriptor.component({ React, ui: { Box: () => null, Text: () => null }, host: { snapshot: () => ({ sessionId, lang }) }, width: 28, height: 16 })
   return snapshot
 }

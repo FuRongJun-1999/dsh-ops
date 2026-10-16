@@ -18,7 +18,7 @@ process.env.FORCE_COLOR = '3'
 const rootPath = resolve(target)
 export const tuiRequire = createRequire(join(rootPath, 'package.json'))
 export const runtimeModule = name => import(pathToFileURL(tuiRequire.resolve(name)).href)
-const source = existsSync(join(rootPath, 'src', 'dsh-adapter', 'panels.ts'))
+const source = process.env.DSH_OPS_TUI_BUILT !== '1' && existsSync(join(rootPath, 'src', 'dsh-adapter', 'panels.ts'))
 export let unregister
 if (source) {
   const { register } = await runtimeModule('tsx/esm/api')
