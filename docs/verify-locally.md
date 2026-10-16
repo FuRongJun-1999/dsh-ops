@@ -75,6 +75,6 @@ concurrency windows (W1g/W1h) need a host where DACLs are measurable and where o
 process can hold a lock while another is mid-call. A DSH agent sandbox cannot do either:
 under `workspace-write` Node cannot spawn the worker at all (`spawn EPERM`), and under
 `danger-full-access` the worker's own atomic create is refused. That half stays a manual
-checklist — `docs/windows-verification.md` §W1 and §W3, tracked in the issue linked from
-there — and a hosted `windows-latest` runner can run it without a human, because a
-runner is not an agent sandbox (the repository already measures DACLs in hosted tests).
+checklist — `docs/windows-verification.md` §W1 and §W3, tracked in **#119** — and a hosted
+`windows-latest` runner can run it without a human, because a runner is not an agent
+sandbox (the repository already measures DACLs in hosted tests).
