@@ -121,6 +121,10 @@ The capability is taken; the duplicate component is not.
 
 ## [Unreleased]
 
+### Aggregate sidebar anomaly alerts
+
+- Add constant-memory, explicitly all-session anomaly badges without opening the panel or changing focus. Count only accepted settlements; acknowledge notifications with focused `a` without changing tool/session facts. Keep observer and badge failures isolated and respect the host-owned panel ID.
+
 ### Native sidebar source integration
 
 - Add opt-in real Rust worker → OPS file runtime → DSH AgentLoop/committed Session → admitted TUI coverage, with a scripted model and owned temporary workspace. Keep source-test registration separate from Windows release support and production PTC/confinement acceptance.

@@ -6,7 +6,7 @@ import { Writable, PassThrough } from 'node:stream'
 import { assert, report, test, TEST_HOME, PACKAGE_ROOT, waitFor } from './lib/harness.mjs'
 import { call, result } from './lib/activity-events.mjs'
 import { Context, Loader, React, Terminal, hostRow, TuiPanelRuntime, armAdmissionLoader,
-  panelStore, PanelHost, ui, setLang, unregister } from './lib/tui-host.mjs'
+  panelStore, PanelHost, ui, setLang, unregister, createInputRuntime } from './lib/tui-host.mjs'
 
 const composition = join(TEST_HOME, 'composition')
 mkdirSync(join(composition, 'node_modules'), { recursive: true })
@@ -47,8 +47,8 @@ try {
       const screen = () => Array.from({ length: rows }, (_, y) => term.buffer.active.getLine(term.buffer.active.baseY + y)?.translateToString(true) ?? '').join('\n')
       let session = { sessionId: 'one', version: 0, cwd: TEST_HOME, working: false, spinnerMode: 'idle',
         todos: [], subagents: [], backgroundJobs: [], rows: [], notify() {}, subscribe() { return () => {} } }
-      const controller = { enabledPanelIds: [id], activePanelId: id, focus: 'chat', zoom: false,
-        runtime: { registerInput: () => () => {}, dispatchKey: () => false } }
+      const runtime = createInputRuntime()
+      const controller = { enabledPanelIds: [id], activePanelId: id, focus: 'chat', zoom: false, runtime }
       const tree = () => {
         const body = React.createElement(ui.ThemeProvider, { theme: 'dark' }, React.createElement(ui.Box, null,
           React.createElement(ui.Box, { width: 18 }, React.createElement(ui.Text, null, 'chat-ok')),
@@ -74,6 +74,17 @@ try {
         assert.ok(screen().includes('ops_batch'))
         assert.ok(screen().includes('chat-ok'))
         const captured = screen()
+        const alertsWord = chinese ? '所有会话' : 'All sessions'
+        assert.ok(screen().includes(alertsWord), 'aggregate scope is explicit, not the last viewed session')
+        assert.equal(panelStore.get(id).badge.level, 'error')
+        assert.equal(runtime.dispatchKey(id, 'a'), false, 'chat focus must not acknowledge alerts')
+        controller.focus = 'panel'; app.rerender(tree())
+        await waitFor(() => runtime.isEnabled(id), { what: 'focused panel input registration' })
+        assert.equal(runtime.dispatchKey(id, 'a', { ctrl: true }), false)
+        assert.equal(runtime.dispatchKey(id, 'a'), true)
+        await waitFor(() => !screen().includes(alertsWord), { what: 'explicit all-session acknowledgement' })
+        assert.equal(panelStore.get(id).badge, null)
+        controller.focus = 'chat'; app.rerender(tree())
         session = { ...session, sessionId: key + '-other', version: 2 }; app.rerender(tree())
         await waitFor(() => screen().includes(words.calls + ' 0'), { what: 'session switch isolation' })
         session = { ...session, sessionId: key, version: 3 }; app.rerender(tree())

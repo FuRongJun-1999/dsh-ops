@@ -32,6 +32,14 @@ This is not history replay or persistent accounting. Closing/reopening the tab p
 
 Shell prose and spilled/truncated content cannot reliably establish business status and remain business-unconfirmed, never success. Only a single JSON text of at most 64 KiB is parsed; fixed categories, counters, booleans and a bounded error code are retained, not error messages.
 
+## Aggregate anomaly alerts
+
+The OPS tab uses the public badge API for newly observed refusals/partial failures (warning) and operation/transport errors or explicit unknown effects (error). Normal returns, previews and business-unconfirmed prose do not create alerts. Duplicate events do not inflate them. Observation continues while the panel is hidden; alerts never open the tab or move focus.
+
+This is an **all-session aggregate since the last acknowledgement**, not the current session's failure count or an unresolved-issues list. The panel labels the scope explicitly. It retains only a count and the highest severity, no session IDs or result bodies; activity LRU eviction does not reset it. Counts saturate at 999 (the panel shows `999+` once exceeded).
+
+With the OPS panel focused, press **a** to acknowledge all aggregate alerts. This only resets notification state, never session statistics, tools, permissions or jobs. Switching sessions and focusing the panel do not acknowledge it. The host may clear the tab indicator on opening the tab independently; the labelled aggregate count remains until acknowledgement or component unload. No missing opened/focused notification hooks or polling are assumed.
+
 ## Limits
 
 Only these keys belong on the TUI row:
@@ -47,7 +55,7 @@ These bound observer memory, not tool execution. At active capacity, new calls a
 ## Verification
 
 ```console
-node test/run.mjs tui-activity tui-panel tui-result manifest
+node test/run.mjs tui-activity tui-panel tui-result tui-attention manifest
 DSH_OPS_TUI_ROOT=/path/to/dsh-TUI DSH_OPS_REQUIRE_TUI=1 node test/run.mjs tui-host
 ```
 

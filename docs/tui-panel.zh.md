@@ -32,6 +32,14 @@ config:
 
 Shell 输出或被 spill/截断的内容无法可靠恢复业务状态，会保持「业务状态未确认」，不会假报成功。只解析最多 64 KiB 的单条 JSON 文本，且只保留固定类别、计数、布尔值和有界错误码，不保留错误正文。
 
+## 汇总异常提醒
+
+OPS 标签通过公开徽标 API 提醒新观察到的拒绝/部分失败（warning）、业务/执行错误或明确未知副作用（error）。普通返回、预览和业务状态未确认的文本不触发提醒，重复事件不累计。面板隐藏时继续观测，提醒不自动打开面板、不抢焦点。
+
+这是**自上次确认以来、所有会话的汇总**，不是当前会话失败数量，也不是未解决问题清单；面板明确标注范围。只保留计数和最高级别，不保留会话 ID 或结果正文；活动统计的 LRU 淘汰不重置汇总。数量封顶 999，超过后面板标为 `999+`。
+
+聚焦 OPS 面板后按 **a** 确认全部汇总提醒。只重置通知状态，不影响会话统计、工具、权限或任务。切换会话、聚焦面板都不会确认汇总。宿主打开标签时可能自行清掉标签指示点，但标明范围的汇总计数保留到显式确认或组件卸载。不依赖尚未实现的 opened/focused 通知，也不轮询。
+
 ## 上限
 
 TUI 行只接受以下键：
@@ -47,7 +55,7 @@ TUI 行只接受以下键：
 ## 验证
 
 ```console
-node test/run.mjs tui-activity tui-panel tui-result manifest
+node test/run.mjs tui-activity tui-panel tui-result tui-attention manifest
 DSH_OPS_TUI_ROOT=/path/to/dsh-TUI DSH_OPS_REQUIRE_TUI=1 node test/run.mjs tui-host
 ```
 

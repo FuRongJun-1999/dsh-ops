@@ -37,3 +37,20 @@ export const { PanelHost } = await import(pathToFileURL(join(rootPath, source ? 
 export const ui = await hostModule('ui')
 export const { setLang } = await hostModule('i18n')
 setLang('en')
+
+/** Test driver for the public, focus-gated panel input runtime. */
+export function createInputRuntime() {
+  const handlers = new Map()
+  return {
+    registerInput(panelId, handler, enabled) {
+      const entry = { handler, enabled }; handlers.set(panelId, entry)
+      return () => { if (handlers.get(panelId) === entry) handlers.delete(panelId) }
+    },
+    dispatchKey(panelId, input, key = {}) {
+      const entry = handlers.get(panelId)
+      return entry?.enabled ? entry.handler(input, key) : false
+    },
+    isEnabled: panelId => handlers.get(panelId)?.enabled === true,
+    size: () => handlers.size,
+  }
+}
