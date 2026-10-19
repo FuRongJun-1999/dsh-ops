@@ -7,12 +7,12 @@
  * automation. It runs the real worker through the same boundary the shipped
  * product uses and asserts what the code does today:
  *
- * - W1a/W1b are **finding mode**: `atomic_write` publishes by rename without
- *   metadata restoration on Windows (the `#[cfg(unix)]` restoration skips this
- *   platform), so an explicit DACL is lost and inheritance returns. The tests
- *   lock the finding in with names that say so — when the fix (`ReplaceFileW`)
- *   lands, these are the assertions to flip, and CI will force the flip to be
- *   conscious rather than accidental.
+ * - W1a/W1b assert **exact preservation** (main's #187 publishes through the
+ *   Windows metadata path: owner / group / DACL / timestamps are carried onto
+ *   the private sibling before publication). An explicit DACL and a deny ACE
+ *   must survive the replacement unchanged; an inherited-only descriptor must
+ *   not be replaced by a fresh one. If the platform path regresses to a plain
+ *   rename, these two tests turn red — that is the point.
  * - W1d/W1e assert the **error shape**, not a specific code: the issue's own
  *   correction is that the guarantee is structured (`code`/`phase`), not a
  *   pinned platform string. Both also assert no `.target.dsh-ops-<uuid>` debris.
@@ -61,7 +61,7 @@ const waitFor = (bound, predicate) => {
   return false
 }
 
-await test('W1a (finding, expected until ReplaceFileW): an explicit DACL does not survive a replacement — inheritance returns', async () => {
+await test('W1a (preservation): an explicit DACL survives a replacement unchanged — inheritance does not return', async () => {
   await withTempDir('w1a-dacl', async workspace => {
     const target = seed(path.join(workspace, 'w1a.txt'))
     execFileSync('icacls', [target, '/inheritance:r'])
@@ -76,12 +76,14 @@ await test('W1a (finding, expected until ReplaceFileW): an explicit DACL does no
     const after = aclOf(target)
     console.log(`    [W1a before]\n${before.split('\n').map(l => `      ${l}`).join('\n')}`)
     console.log(`    [W1a after]\n${after.split('\n').map(l => `      ${l}`).join('\n')}`)
-    assert.equal(after.includes(`${USERNAME}:(R)`), false,
-      'the finding: the explicit read-only grant is gone (measured: it came back as (F) full control — access widened)')
+    assert.equal(after.includes(`${USERNAME}:(R)`), true,
+      'the explicit read-only grant must survive the replacement exactly (no widening, no loss)')
+    assert.equal(after.includes('(I)'), false,
+      'inheritance must not come back: the replacement keeps the explicit-only DACL')
   })
 })
 
-await test('W1b (finding, security-critical direction): a deny ACE for another principal does not survive a successful replacement — access widens for them', async () => {
+await test('W1b (preservation, security-critical direction): a deny ACE for another principal survives a successful replacement — access does not widen for them', async () => {
   await withTempDir('w1b-deny-guest', async workspace => {
     const target = seed(path.join(workspace, 'w1b.txt'))
     execFileSync('icacls', [target, '/inheritance:r'])
@@ -95,7 +97,7 @@ await test('W1b (finding, security-critical direction): a deny ACE for another p
 
     const after = aclOf(target)
     console.log(`    [W1b after]\n${after.split('\n').map(l => `      ${l}`).join('\n')}`)
-    assert.equal(after.match(/DENY/u), null, 'the finding: the deny ACE is gone — Guest\'s restriction widened away')
+    assert.match(after, /DENY/u, 'the deny ACE must survive the replacement — dropping it would widen Guest\'s access')
     settle(200)
   })
 })

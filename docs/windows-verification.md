@@ -26,14 +26,16 @@ difference is the deliverable, not a nuisance.
 > every `npm run verify` Windows lane, so this half no longer needs a human.
 > The measurements, with raw `icacls` before/after in the suite output:
 >
-> - **W1a — finding confirmed, and it is worse than "lost"**: the explicit
->   read-only grant (`user:(R)`, inheritance removed) comes back as
->   `user:(F)` — full control. The replacement **widened** access.
-> - **W1b — finding confirmed**: a deny ACE for another principal
->   (`Guest:(DENY)(W)`) does not survive a successful replacement; the
->   restriction is widened away. (A deny that blocks the caller's own write
->   refuses earlier — see the W1b-failclosed note in the suite history; the
->   observable mechanism is covered by W1d's structured refusal.)
+> - **W1a — fixed (#187), exact preservation asserted**: the explicit
+>   read-only grant (`user:(R)`, inheritance removed) survives the replacement
+>   unchanged, and inheritance does not come back. (The 2026-10-15 measurement
+>   recorded the pre-fix behaviour: `user:(R)` came back as `user:(F)` — the
+>   replacement used to widen access; that is no longer what the suite asserts.)
+> - **W1b — fixed (#187), exact preservation asserted**: a deny ACE for
+>   another principal (`Guest:(DENY)(W)`) survives a successful replacement;
+>   the suite fails if the restriction is dropped. (A deny that blocks the
+>   caller's own write still refuses earlier — covered by W1d's structured
+>   refusal.)
 > - **W1c — same-user owner unchanged** (the two-user case still needs a
 >   second account).
 > - **W1d — confirmed**: a READONLY target refuses with a **structured**
@@ -59,17 +61,17 @@ and `test/file-metadata.test.mjs` locks that in: `0600` and `0400` stay `0600`/`
 their values. Verified live on Linux before the fix: `0600` → `0664`
 (world-readable), `0755` → `0664` (a script stops being executable).
 
-Windows takes a **different** path and is **not** fixed, because it needs
-measurements this machine cannot produce. Windows has no POSIX mode bits: what a
-replacement loses there is the *security descriptor*.
+Windows takes a **different** path and is **fixed** (#187): Windows has no POSIX
+mode bits, so what a replacement used to lose there was the *security
+descriptor*. `atomic_write()` now prepares the private sibling through the
+Windows metadata path (`native/windows-metadata`): it carries the target's
+owner, group, DACL and timestamps onto the sibling, then publishes by rename.
+The before/after `icacls` measurements below stay as the historical record
+(2026-10-15, pre-fix); `test/windows-security.test.mjs` now asserts **exact
+preservation** and turns red if the platform path regresses to a plain rename.
 
-Mechanism to check: `atomic_write()` publishes with an ordinary rename, which
-`cap-std` maps on Windows to `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)`. That
-substitutes the directory entry and therefore the **new** file's security
-descriptor. `ReplaceFileW` is the Windows API that preserves the replaced file's
-ACL and attributes, and is the natural fix if this reproduces.
-
-Everything below is a question, not a measurement.
+Everything below is either a measurement with its date or a question, not an
+assumption.
 
 ### W1a — explicit DACL survives a replace?
 
@@ -87,14 +89,17 @@ icacls $f
 Get-Acl $f | Format-List Owner,AccessToString
 ```
 
-Pass (fixed): the explicit ACE set is still there. Finding (current expected):
-the DACL is gone or replaced by the directory's inherited ACEs, and the file's
-effective access changed without any report to the caller.
+Pass (fixed, asserted by `test/windows-security.test.mjs` W1a): the explicit
+ACE set is still there, unchanged, and no inherited ACE appears.
+Historical finding (2026-10-15, pre-#187 — no longer expected): the DACL was
+gone or replaced by the directory's inherited ACEs, and the file's effective
+access changed without any report to the caller.
 
 ### W1b — a non-inherited *deny* ACE is dropped
 
 This is the security-critical direction: a deny ACE restricts access the
 directory's inheritance would otherwise grant. Losing it **widens** access.
+Asserted by the suite (W1b): the deny ACE survives the replacement.
 
 ```powershell
 $f = "$env:TEMP\w1b.txt"; "x" | Set-Content -NoNewline $f
