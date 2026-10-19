@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "dsh-ops-background",
-    "description": "为科研仿真、模型训练及其他长进程后台任务提供托管"
+    "description": "已移除：不再提供 FastCtx 后台任务。此行仅作空操作加载，请从 profile 中删除。"
   }
 }

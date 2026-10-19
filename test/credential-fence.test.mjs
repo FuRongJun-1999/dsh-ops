@@ -153,6 +153,9 @@ await test('the file bridge refuses a credential path before the worker is spawn
       const refused = await invoke(ctx, path.join(workspace, 'worker'), 'inspect_local_file', { path: key }, exec, undefined, { denyCredentialReads: true })
       assert.equal(refused.status, 'rejected', JSON.stringify(refused))
       assert.match(JSON.stringify(refused), /credential location/)
+      assert.equal(refused.error.code, 'CREDENTIAL_DENIED')
+      assert.equal(refused.error.permission, undefined)
+      assert.match(refused.error.nextAction, /credential fence|operator/i)
       assert.equal(spawned, false, 'the refusal must happen before the worker is spawned')
 
       // The row-level opt-out reaches the call: with the fence off the refusal is not what stops it.
@@ -215,15 +218,95 @@ await test('recursive file requests and batch copies enforce credential policy o
       deny_credential_names: policy,
       deny_roots: [path.join(workspace, '.ssh')],
     })), assert)
-    assert.equal((await run('inspect_local_file', { path: path.join(workspace, 'service-account-prod.json') })).error.code, 'POLICY_DENIED')
+    assert.equal((await run('inspect_local_file', { path: path.join(workspace, 'service-account-prod.json') })).error.code, 'CREDENTIAL_DENIED')
     const search = await run('grep', { path: workspace, pattern: 'SECRET_TOKEN' })
     assert.equal(search.matched, 0, JSON.stringify(search))
     assert.equal((await run('grep', { path: workspace, pattern: 'SECRET_TOKEN' }, false)).matched, 1)
     const copy = await run('batch', { action: 'plan', operations: [{ op: 'copy', path: 'service-account-prod.json', to: 'exposed.txt' }] })
-    assert.equal(copy.error.code, 'POLICY_DENIED', JSON.stringify(copy))
+    assert.equal(copy.error.code, 'CREDENTIAL_DENIED', JSON.stringify(copy))
     fs.mkdirSync(path.join(workspace, '.ssh')); fs.writeFileSync(path.join(workspace, '.ssh/config'), 'private')
-    assert.equal((await run('batch', { action: 'plan', operations: [{ op: 'copy', path: '.ssh/config', to: 'exposed.txt' }] })).error.code, 'POLICY_DENIED')
+    assert.equal((await run('batch', { action: 'plan', operations: [{ op: 'copy', path: '.ssh/config', to: 'exposed.txt' }] })).error.code, 'CREDENTIAL_DENIED')
     assert.equal(fs.existsSync(path.join(workspace, 'exposed.txt')), false)
+  })
+})
+
+await test('the fence refuses writes and copy destinations, and the wording names both directions', async () => {
+  await withTempDir('credential-directions', async workspace => {
+    const home = path.join(workspace, 'home')
+    fs.mkdirSync(path.join(home, '.ssh'), { recursive: true })
+    const key = path.join(home, '.ssh', 'id_ed25519')
+    fs.writeFileSync(key, 'PRIVATE\n')
+    fs.writeFileSync(path.join(workspace, 'plain.txt'), 'PLAIN\n')
+    let spawned = false
+    const ctx = { get: name => ({
+      sandboxPolicy: { resolve: () => ({ mode: 'workspace-write', workspaceRoot: workspace }) },
+      subprocess: { spawn: () => { spawned = true; throw new Error('the fence must refuse before spawning') } },
+    })[name] }
+    const exec = { agent: { session: { id: 's-directions', header: { cwd: workspace } } } }
+    const worker = path.join(workspace, 'worker')
+    const config = { denyCredentialReads: true }
+    await withFakeHome(home, async () => {
+      const read = await invoke(ctx, worker, 'inspect_local_file', { path: key }, exec, undefined, config)
+      const written = await invoke(ctx, worker, 'write', { path: key, content: 'OVERWRITTEN\n' }, exec, undefined, config)
+      const copied = await invoke(ctx, worker, 'copy', { path: path.join(workspace, 'plain.txt'), to: key }, exec, undefined, config)
+      for (const [label, refused] of [['a read', read], ['a write', written], ['a copy destination', copied]]) {
+        assert.equal(refused.error?.code, 'CREDENTIAL_DENIED', label + ' must be refused: ' + JSON.stringify(refused))
+        assert.match(refused.error.message, /credential location/)
+      }
+      assert.equal(spawned, false, 'every refusal must happen before the worker is spawned')
+      assert.equal(fs.readFileSync(key, 'utf8'), 'PRIVATE\n', 'a refused write must not touch the file')
+    })
+
+    // The refusal is direction-neutral on purpose: a caller stopped from writing must not read the
+    // wording as "reads are fenced, writes are fine" (#204 P4).
+    const refusal = credentialRefusal(key, '~/.ssh')
+    assert.match(refusal.message, /neither read nor write/)
+    assert.ok(!/do not read credentials/.test(refusal.message))
+
+    // And the configuration reference states the same reach the implementation has, so the two
+    // cannot drift apart silently.
+    const doc = fs.readFileSync(new URL('../docs/configuration-reference.md', import.meta.url), 'utf8')
+    assert.match(doc, /The credential fence/)
+    assert.match(doc, /as a write/)
+  })
+})
+
+await test('the fence refuses every direction on a credential path, including writes', async () => {
+  await withTempDir('credential-directions', async workspace => {
+    const home = path.join(workspace, 'home')
+    fs.mkdirSync(path.join(home, '.ssh'), { recursive: true })
+    const key = path.join(home, '.ssh', 'id_rsa')
+    fs.writeFileSync(key, 'PRIVATE')
+    const source = path.join(workspace, 'source.txt')
+    fs.writeFileSync(source, 'payload')
+
+    let spawned = 0
+    // danger-full-access is the decisive case: the DSH permission mode allows the write, so a
+    // refusal here can only come from this fence.
+    const ctx = { get: name => ({
+      sandboxPolicy: { resolve: () => ({ mode: 'danger-full-access', workspaceRoot: workspace }) },
+      subprocess: { spawn: () => { spawned += 1; throw new Error('the fence must refuse before spawning') } },
+    })[name] }
+    const exec = { agent: { session: { id: 's-directions', header: { cwd: workspace } } } }
+    const worker = path.join(workspace, 'worker')
+
+    await withFakeHome(home, async () => {
+      const cases = [
+        ['inspect_local_file', { path: key }],
+        ['write_file', { path: key, content: 'PWN', expectedRevision: 'absent' }],
+        ['replace', { path: key, pattern: 'PRIVATE', replacement: 'PWN' }],
+        ['copy', { path: source, to: key }],
+        ['remove', { path: key, expectedRevision: 'whatever' }],
+      ]
+      for (const [tool, toolArgs] of cases) {
+        const refused = await invoke(ctx, worker, tool, toolArgs, exec, undefined, { denyCredentialReads: true })
+        assert.equal(refused.status, 'rejected', `${tool}: ${JSON.stringify(refused)}`)
+        assert.equal(refused.error.code, 'CREDENTIAL_DENIED', `${tool} must be refused by the fence: ${JSON.stringify(refused)}`)
+        assert.match(refused.error.message, /read|write|copy|replace|remov/i, `${tool} refusal must name the directions: ${refused.error.message}`)
+      }
+      assert.equal(spawned, 0, 'every direction must be refused before the worker is spawned')
+      assert.equal(fs.readFileSync(key, 'utf8'), 'PRIVATE', 'the credential file is untouched')
+    })
   })
 })
 

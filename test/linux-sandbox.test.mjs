@@ -106,7 +106,7 @@ await test('a symlink is refused before any open, inside or outside the root', a
       for (const [label, target] of [['escaping', escaping], ['in-root', inside]]) {
         const refused = envelopeOf(await callTool('inspect_local_file', { path: target }, { root: workspace }), assert)
         assert.equal(refused.status, 'error', `${label}: ${JSON.stringify(refused)}`)
-        assert.equal(refused.error.code, 'POLICY_DENIED')
+        assert.equal(refused.error.code, 'PATH_RESTRICTED', `${label} => ${refused.error.code}`)
         assert.match(refused.error.message, /not traversed/)
       }
       // The link target itself is still readable by its real name, so the refusal
@@ -137,7 +137,7 @@ await test('special objects are refused in milliseconds rather than opened', asy
         const started = Date.now()
         const refused = envelopeOf(await callTool('inspect_local_file', { path: target }, { root: workspace, timeoutMs: 8_000 }), assert)
         assert.equal(refused.status, 'error', `${target} was opened: ${JSON.stringify(refused)}`)
-        assert.equal(refused.error.code, 'POLICY_DENIED', `${target} => ${refused.error.code}`)
+        assert.equal(refused.error.code, 'PATH_RESTRICTED', `${target} => ${refused.error.code}`)
         assert.match(refused.error.message, /not traversed/)
         assert.ok(Date.now() - started < 5_000, `${target} took ${Date.now() - started} ms; it must be refused before the open`)
       }

@@ -1,8 +1,8 @@
 # 在 Linux x64 上构建与运行 dsh-ops
 
-Linux x64 是 **file**、**ptc**、**background** 三个组件的受支持目标。**shell**
-组件（`ops_bash`、随包 PowerShell 7、bash IPC 代理）仍仅限 Windows x64 —— Linux
-上没有可发布的随包 bash，插件也不会假装有。
+Linux x64 是 **file**、**ptc**、**shell** 三个组件的受支持目标。Linux 上 shell
+组件的 `ops_bash` 使用发行版自带的 bash（见[配置 shell 通道](#配置-shell-通道)）；随包
+PowerShell 7 与 bash IPC 代理仍仅限 Windows x64。
 
 Linux 上**没有任何东西随安装包下载**：原生 worker 一律由本地源码构建后落到安装相对
 目录，这正是本文档存在的原因。npm 包仍然只携带 Windows x64 载荷
@@ -12,15 +12,14 @@ Linux 上**没有任何东西随安装包下载**：原生 worker 一律由本�
 | --- | --- | --- |
 | `dsh-ops/file` | 支持 | 4 个工具：`ops_inspect_local_file`、`ops_grep`、`ops_glob`、`ops_replace` |
 | `dsh-ops/ptc` | 支持 | `ops_batch`、`ops_result`；须显式启用 |
-| `dsh-ops/background` | 支持，但需要一个 bash | job 工具受"可解析的 bash"约束，见下文 |
-| `dsh-ops/shell` | 不支持 | `ops_bash` 与 pwsh 仍仅限 Windows x64 |
+| `dsh-ops/shell` | 支持 | `ops_bash` 使用宿主 bash；pwsh 仍仅限 Windows x64 |
 
 ## 前置条件
 
 | 依赖 | 版本 | 依据 |
 | --- | --- | --- |
 | Node.js | `^22.19 \|\| >=24` | `package.json` 的 `engines` |
-| Rust | `1.88` 或更高（`cargo`） | `native/Cargo.toml` 与 `vendor/fastctx/Cargo.toml` 的 `rust-version` |
+| Rust | `1.88` 或更高（`cargo`） | `native/Cargo.toml` 的 `rust-version` |
 | pnpm | 近期版本即可 | `dsh plugin` 会转发给它 |
 | DSH | `0.2.0-rc.2` | 本版目标宿主 |
 
@@ -42,7 +41,7 @@ added 45 packages in 499ms
 若你手上的树其 `os` 仍是 Windows-only（例如已发布的 0.3.0 tarball），同一条命令会在
 `EBADPLATFORM` 停下，已发布的 `npx dsh-ops@latest install` 入口在 Linux 上也不可用。
 与 tarball 如何发布无关、始终可用的路径见
-[第 6 节：安装进 profile](#6-安装进-profile)。
+[第 5 节：安装进 profile](#5-安装进-profile)。
 
 确实需要把 Windows-only 的树强行装上时，`npm install --force` 可以做到；注意它同时会
 跳过 npm 的脚本闸门。有三个依赖带 install 脚本（`node-pty`、`koffi`、
@@ -72,58 +71,22 @@ runtime/linux-x64/provenance.json
 确认接线正常：
 
 ```console
-$ node bin/dsh-ops.mjs status
+$ node bin/dsh-ops.mjs ladder
 ```
 
-## 4. 构建 FastCtx（仅 background 组件需要）
+报告第一节 `Native worker (file tools)` 会写明已落地的 worker 及其解析来源。
 
-file 与 PTC 组件使用自己的 Rust worker，**不需要** FastCtx。只有
-`dsh-ops/background` 需要，所以这一步是可选的。
-
-```console
-$ cargo build --release --locked --manifest-path vendor/fastctx/Cargo.toml
-    Finished `release` profile [optimized] target(s) in 2m 33s
-```
-
-产物位于 `vendor/fastctx/target/release/fastctx`。两种指认方式：
-
-```console
-$ export DSH_OPS_FASTCTX_BIN="$PWD/vendor/fastctx/target/release/fastctx"
-```
-
-或写进 profile 行：
-
-```yaml
-- id: dsh-ops-background
-  disabled: false
-  config:
-    binaryPath: /absolute/path/to/fastctx
-    enableShellTools: true
-```
-
-`resolveBinary()` 依次搜索：托管运行时、vendored 构建、本包自带的平台包、已发布的
-`@fastctx/<platform>-<arch>` 包、`PATH`。找不到时它会**列出它试过的每一级**，所以缺
-运行时永远不会是一桩无头悬案。
-
-## 5. 在本机验证
+## 4. 在本机验证
 
 门禁有三种结果 —— 通过、失败、跳过 —— 且**跳过永远不计入通过**。
-`DSH_OPS_REQUIRE_RUNTIME=1` 会把跳过变成失败，这是最严格的形式：
+`DSH_OPS_REQUIRE_RUNTIME=1` 会把跳过变成失败（例如在 `npm run build:ptc` 之前运行原生
+worker 套件），这是最严格的形式：
 
 ```console
-$ DSH_OPS_FASTCTX_BIN="$PWD/vendor/fastctx/target/release/fastctx" \
-  DSH_OPS_REQUIRE_RUNTIME=1 npm run verify
-…
-dsh-ops test: 30 suite(s) passed in 15s
+$ DSH_OPS_REQUIRE_RUNTIME=1 npm run verify
 ```
 
-没有 FastCtx 构建时，同一条命令会少跑两个套件，并明确列出跳过项：
-
-```console
-dsh-ops lifecycle: skipped (no FastCtx executable found; …)
-dsh-ops mount: skipped (no FastCtx executable found; …)
-dsh-ops test: 28 suite(s) passed, 2 skipped in 11s
-```
+以其它平台为对象的套件（例如 Windows ACL）会自行跳过，并在汇总行中写明原因。
 
 Rust worker 自身的 barrier 测试：
 
@@ -184,7 +147,7 @@ Validated 1 native runtime(s); no install-time scripts or permission changes.
 因为那是发布装配脚本在发布之前要问的问题。组装跨平台发布版、希望缺平台即失败时，
 设 `DSH_OPS_REQUIRE_ALL_TARGETS=1`。
 
-## 6. 安装进 profile
+## 5. 安装进 profile
 
 `npx dsh-ops@latest install` 是文档里的 Windows 路径，依赖一个 Windows-only 的 npm
 tarball。在 Linux 上，请通过 DSH 自己的插件管理器从检出目录安装，它会转发给 pnpm：
@@ -213,26 +176,16 @@ Linux 上 `ops_bash` 开箱可用：`shell` 组件不随包提供 shell，而是
 bash（`config.bashPath` → `PATH` → `/bin/bash`、`/usr/bin/bash`、`/usr/local/bin/bash`）；
 受限模式必须由宿主沙箱落实约束，沙箱无法约束时拒绝执行，绝不无约束运行。
 
-需要显式指定 bash 的是 **`background`** 组件的 job 工具（`ops_run_background`、
-`ops_job_output`、`ops_job_list`、`ops_job_kill`）：这条车道在 0.3.1 仅 Windows（其载荷与
-IPC 代理如此），因此在 Linux 上它有意不采用 `shell` 组件那条宿主 bash 档位，只有显式路径
-才能到达它。不给路径时这些工具保持不发布——这是 fail-closed，不是缺陷：
-`FastCtxTools.shellAllowed()` 在无可解析执行器时会拒绝提供命令面。
-
-要拿到这些工具：
+要使用另一个 bash，在 shell 行显式指定：
 
 ```yaml
-- id: dsh-ops-background
+- id: dsh-ops-shell
   config:
     bashPath: /usr/bin/bash
 ```
 
-> **`allowSystemShellFallback: true` 不起作用。** 启动期的配置迁移会有意把这个键改回
-> `false` —— 它是安全姿态降级（使用未固定摘要的系统 shell），迁移不会让部署静默滑进去。
-> `bashPath` 是受认可且显式的替代品，而且配置的路径是权威的：它胜过 `PATH` 与随包布局。
->
-> 受限模式下同样如此：`workspace-write` 与 `read-only` 的 confinement 会拒绝摘要未被
-> 固定的 MSYS 形态 bash，所以请把 `bashPath` 指向普通的系统 bash，交由 DSH 沙箱去约束它。
+> Linux 上 `allowSystemShellFallback` 不起作用：宿主 bash 本身就是这一档。配置的
+> `bashPath` 是权威的：它胜过 `PATH` 与常见安装位置。
 
 ## 故障排查
 
@@ -244,7 +197,6 @@ IPC 代理如此），因此在 Linux 上它有意不采用 `shell` 组件那条
 | file 工具无声消失、没有任何报错 | `resolveWorker()` 抛错后组件降级，而 `required` 缺省为 `false` | 给 `dsh-ops/file` 行设 `required: true`，让它变响 |
 | `preflight` 阶段报 `Bad file descriptor (os error 9)` | 审计库或原子替换对 cap-std 在 Linux 上以 `O_PATH` 打开的目录句柄执行 `fsync`，内核拒绝 | 已在 `native/src/lib.rs` 修复；用 `npm run build:ptc` 重建 |
 | 被拒命令报成普通失败而非 `POLICY_DENIED` | 宿主提供的英文拒绝签名去匹配被本地化的 libc 消息 | bash 通道已固定 `LC_MESSAGES=C`；旧构建在非英文宿主上会命中此问题 |
-| job 工具始终不出现 | 没有可解析的 bash | 设置 `bashPath`，见上文 |
 
 ## 为什么要本地构建
 

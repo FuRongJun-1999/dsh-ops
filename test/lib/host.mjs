@@ -3,10 +3,9 @@
  *
  * Every layer here is the production one: real Cordis `Context` and fiber
  * lifecycle, the harness's own `@deepseek-ai/dsh-tools` registry and
- * `@deepseek-ai/dsh-system-prompt` assembly, real registration scopes, and a
- * real FastCtx executable publishing real tools. Nothing is stubbed, so a
- * passing suite is evidence about the shipped composition rather than about a
- * test double.
+ * `@deepseek-ai/dsh-system-prompt` assembly, and real registration scopes.
+ * Nothing is stubbed, so a passing suite is evidence about the shipped
+ * composition rather than about a test double.
  *
  * @module dsh-ops/test/host
  */
@@ -14,9 +13,8 @@
 import { Context } from '@deepseek-ai/cordis'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { probeBinary, resolveBinary } from '../../lib/binary.js'
 import { TOOL_PREFIX } from '../../lib/policy.js'
-import { PACKAGE_ROOT, TEST_HOME } from './harness.mjs'
+import { PACKAGE_ROOT } from './harness.mjs'
 
 /**
  * Boot a context with the real prompt and tool services installed.
@@ -58,89 +56,8 @@ export async function loadPlugin(tag = `${Date.now()}-${Math.random()}`) {
 }
 
 /**
- * The environment a runtime probe runs with.
- *
- * The DSH home is this suite's throwaway one, never the developer's real
- * `~/.dsh`: `test/run.mjs` already injects one per suite, and setting it here as
- * well means a suite invoked directly still probes (and can only write) inside
- * the temporary directory. A probe that read the real home would resolve a
- * runtime the machine happens to have provisioned, which is exactly the
- * difference between a hermetic gate and this machine's own state.
- * @returns {NodeJS.ProcessEnv} the environment to resolve with.
- */
-function probeEnvironment() {
-  return { ...process.env, DSH_HOME: TEST_HOME }
-}
-
-/** The resolution this process already made, so later calls cost nothing. */
-let runtimeResolution
-
-/**
- * Resolve and probe the FastCtx executable without throwing.
- *
- * Every rung the plugin itself uses is searched, in the plugin's own order, and
- * the answer is cached for the process: a suite that resolves once and then
- * calls this from twenty checks probes once, not twenty times. No exception
- * escapes — an unusable environment is an answer, not a crash — so a caller can
- * decide whether to skip, to fail, or to press on.
- *
- * @param {object} [options] - resolution inputs.
- * @param {NodeJS.ProcessEnv} [options.env] - the environment to resolve with.
- * @param {boolean} [options.refresh] - resolve again instead of reusing the cached answer.
- * @returns {{ok: true, file: string, source: string, version: string}
- *   | {ok: false, reason: string, tried: {file: string, source: string, detail: string}[]}} the answer.
- */
-export function tryResolveRuntime({ env = probeEnvironment(), refresh = false } = {}) {
-  if (!refresh && runtimeResolution !== undefined) return runtimeResolution
-  try {
-    const resolved = resolveBinary({ packageRoot: PACKAGE_ROOT, env })
-    const probe = probeBinary(resolved.file, { env })
-    runtimeResolution = probe.ok
-      ? { ok: true, file: resolved.file, source: resolved.source, version: probe.version }
-      : {
-        ok: false,
-        reason: `${resolved.file} is not a working FastCtx build: ${probe.detail}`,
-        tried: resolved.tried,
-      }
-  } catch (error) {
-    runtimeResolution = {
-      ok: false,
-      reason: String(error?.message ?? error),
-      tried: Array.isArray(error?.tried) ? error.tried : [],
-    }
-  }
-  return runtimeResolution
-}
-
-/**
- * Resolve and probe the FastCtx executable the way the plugin does, for suites
- * that drive the tool surface directly.
- *
- * The instruction a missing runtime produces is the whole point of this being a
- * wrapper rather than a bare call: whoever hits it is told the two ways out
- * instead of being handed a search log.
- *
- * @param {object} [options] - resolution inputs, as {@link tryResolveRuntime}.
- * @returns {{file: string, source: string, version: string}} the ready runtime.
- * @throws {Error} when no usable executable exists.
- */
-export function resolveRuntime(options = {}) {
-  const resolved = tryResolveRuntime(options)
-  if (resolved.ok) return { file: resolved.file, source: resolved.source, version: resolved.version }
-  throw new Error(
-    `no usable FastCtx runtime: ${resolved.reason}\n`
-    + '  Build one from the vendored source:\n'
-    + '    cargo build --release --locked --manifest-path vendor/fastctx/Cargo.toml\n'
-    + '  or point the plugin at a build someone else made:\n'
-    + '    DSH_OPS_FASTCTX_BIN=<path to the fastctx executable>\n'
-    + `  searched (${resolved.tried.length}):\n`
-    + resolved.tried.map((candidate) => `    ${candidate.source}: ${candidate.file} (${candidate.detail})`).join('\n'),
-  )
-}
-
-/**
- * Mount the plugin and wait until the FastCtx tools appear (or the deadline
- * passes).
+ * Mount the plugin's legacy module entry (the file component) and wait until
+ * its tools appear (or the deadline passes).
  * @param {object} options - mount inputs.
  * @param {Context} options.ctx - the host context.
  * @param {Record<string, unknown>} [options.config] - the plugin row config.

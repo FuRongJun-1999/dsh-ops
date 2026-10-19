@@ -67,7 +67,7 @@ for (const target of targets) {
     fs.mkdirSync(directory,{recursive:true})
     fs.copyFileSync(source,destination)
     if (!target.startsWith('win32-')) fs.chmodSync(destination,0o755)
-    fs.writeFileSync(path.join(directory,'provenance.json'),JSON.stringify({version,target,executable:name,sha256:hash(destination),source:'native/Cargo.lock + native/src; original MIT Rust core'},null,2)+'\n')
+    fs.writeFileSync(path.join(directory,'provenance.json'),JSON.stringify({version,target,executable:name,sha256:hash(destination),source:'native/Cargo.lock + native/src + native/windows-metadata; original MIT Rust core'},null,2)+'\n')
   } else if (command !== 'check') throw Error('Expected stage or check')
   const receiptPath = path.join(directory,'provenance.json')
   // `check` without a scope demands every declared target, so on a one-host source

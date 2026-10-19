@@ -1,4 +1,5 @@
 /** Native file-tool descriptions must describe the schemas the worker enforces (#44). */
+import fs from 'node:fs'
 import { DESCRIPTIONS, PARAMETERS } from '../lib/file/contract.js'
 import { DESCRIPTIONS as PTC_DESCRIPTIONS } from '../lib/ptc/contract.js'
 import { assert, report, test } from './lib/harness.mjs'
@@ -35,6 +36,14 @@ await test('every file tool states that failures are values, not thrown errors',
   }
   assert.doesNotMatch(PTC_DESCRIPTIONS.result, /legacy ops_\*/)
   assert.match(PTC_DESCRIPTIONS.result, /not thrown errors/)
+})
+
+await test('current component routing does not advertise removed inspect capabilities', () => {
+  for (const name of ['component-reference.md', '组件参考.md']) {
+    const doc = fs.readFileSync(new URL(`../docs/${name}`, import.meta.url), 'utf8')
+    assert.match(doc, /Bounded UTF-8 text \/ hex \| ops_inspect_local_file/)
+    assert.doesNotMatch(doc, /Text \/ multiple ranges \/ encoding \/ PDF text/)
+  }
 })
 
 report('file-contract')

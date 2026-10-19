@@ -1,5 +1,6 @@
 {
   "format": "dsh-ops-schema-measurement-v1",
+  "status": "historical-0.2.x-fastctx",
   "metric": "UTF-8 bytes of compact JSON {name,description,parameters}; approximate tokens = ceil(bytes/4), not a tokenizer or usage-frequency count",
   "runtimeVersion": "fastctx 0.2.6",
   "tools": [

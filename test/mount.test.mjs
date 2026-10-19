@@ -1,27 +1,38 @@
 /** Real Cordis/tool/prompt composition with the released independent components. */
 import fs from 'node:fs'
 import path from 'node:path'
-import { resolveConfig } from '../lib/config.js'
-import { BASH_TOOL, FILE_TOOLS, BACKGROUND_TOOLS, TOOLING_SECTION, publicToolName } from '../lib/policy.js'
-import { FastCtxTools, childEnv } from '../lib/tools.js'
-import { resolveShells } from '../lib/shells.js'
+import { pathToFileURL } from 'node:url'
+import { BASH_TOOL, FILE_TOOLS, TOOLING_SECTION, publicToolName } from '../lib/policy.js'
 import { applyComponent } from '../lib/index.js'
+import * as ptc from '../lib/ptc/index.js'
+import { resolveWorker } from '../lib/ptc/runtime.js'
 import { PACKAGE_ROOT, assert, report, skipSuite, test, waitFor, withTempDir } from './lib/harness.mjs'
 import { bootHost, callTool, mountPlugin, mountScopedToolPlugin, preExecute, publicToolNames,
-  registryHasOwnRegister, registryNames, renderSections, resolveRuntime, scopedToolNames,
-  shutdown, tryResolveRuntime } from './lib/host.mjs'
+  registryHasOwnRegister, registryNames, renderSections, scopedToolNames,
+  shutdown } from './lib/host.mjs'
 import Sandbox from '@deepseek-ai/dsh-sandbox-local'
 import Subprocess from '@deepseek-ai/dsh-subprocess-local'
+import { officialToolHidingMountChecks } from './lib/official-tool-hiding.mjs'
+
+// Component 4 has no native runtime dependency; always exercise its real mounts.
+await officialToolHidingMountChecks()
 const EXPECTED = FILE_TOOLS.map(publicToolName).sort()
 const FILE_SECTION = `${TOOLING_SECTION}:file`
 const SHELL_SECTION = `${TOOLING_SECTION}:shell`
 const BG_SECTION = `${TOOLING_SECTION}:background`
-const runtime = tryResolveRuntime()
-if (!runtime.ok) {
-  if (process.env.DSH_OPS_REQUIRE_RUNTIME === '1') throw new Error(runtime.reason)
-  skipSuite('mount', runtime.reason)
+// The file component needs the native worker the plugin itself resolves; without one this suite
+// cannot answer here (a skip, which DSH_OPS_REQUIRE_RUNTIME=1 turns into a failure).
+let worker
+try { worker = resolveWorker({}) } catch (error) {
+  if (process.env.DSH_OPS_REQUIRE_RUNTIME === '1') throw error
+  skipSuite('mount', error.message.split('\n')[0])
 }
-console.log(`  runtime: ${runtime.file} (${runtime.source}, ${runtime.version})`)
+console.log(`  worker: ${worker}`)
+/** The row configs earlier bundles wrote into every existing profile (`cordis.patch.yml` before update 2). */
+const LEGACY_ROWS = Object.freeze({
+  file: { promptPolicy: true, enableShellTools: false, required: false, toolCallTimeoutMs: 300000 },
+  background: { promptPolicy: true, enableShellTools: true, required: false, toolCallTimeoutMs: 300000 },
+})
 function foreignTool(name) {
   return { name, description: 'foreign fixture', parameters: { type: 'object', properties: {} },
     output: { schema: { type: 'object' }, render: () => [] }, execute: async () => ({}) }
@@ -32,7 +43,7 @@ async function fileMount(ctx, config = {}) {
   if (!ctx.get('sandboxPolicy')) await ctx.plugin(inner => inner.provide('sandboxPolicy', {
     resolve: ({ session }) => ({ mode: session.mode, workspaceRoot: session.header.cwd, sessionId: session.id }),
   }))
-  return mountPlugin({ ctx, config: { toolCallTimeoutMs: 5000, ...config }, expectTools: EXPECTED.length })
+  return mountPlugin({ ctx, config, expectTools: EXPECTED.length })
 }
 async function agentForCall(ctx, cwd, mode = 'danger-full-access') {
   const result = { id: 'file-call', session: { id: 'file-call', mode, header: { cwd } } }
@@ -41,7 +52,7 @@ async function agentForCall(ctx, cwd, mode = 'danger-full-access') {
   return result
 }
 async function component(ctx, name, config = {}) {
-  return ctx.plugin({ name: `fixture-${name}`, apply(inner) { return applyComponent(inner, { toolCallTimeoutMs: 5000, ...config }, name) } })
+  return ctx.plugin({ name: `fixture-${name}`, apply(inner) { return applyComponent(inner, { ...config }, name) } })
 }
 async function executor(ctx) {
   await ctx.plugin(inner => {
@@ -52,7 +63,7 @@ async function executor(ctx) {
 }
 async function agent(ctx, id, mode = 'danger-full-access', parent) {
   const { createScope } = await import('@deepseek-ai/dsh-scope')
-  const result = { id, session: { mode, header: { cwd: process.cwd() } } }
+  const result = { id, session: { id, mode, header: { cwd: process.cwd() } } }
   let scope
   await (parent?.ctx ?? ctx).plugin({ inject: ['tools'], apply(inner) { scope = createScope(inner, result) } })
   result.ctx = scope.ctx
@@ -63,7 +74,7 @@ async function sections(ctx, currentAgent) { return renderSections(ctx, currentA
 async function visible(ctx, currentAgent, expected) {
   await waitFor(() => expected.every(name => scopedToolNames(ctx, currentAgent).includes(name)), { timeoutMs: 5000, what: expected.join(', ') })
 }
-await test('file mount owns exactly four tools and never overrides the registry', async () => {
+await test('file mount owns exactly the declared native tools and never overrides the registry', async () => {
   const { ctx } = await bootHost()
   try {
     const { tools } = await fileMount(ctx)
@@ -100,13 +111,41 @@ await test('the same foreign name registers in two real scopes without becoming 
     assert.deepEqual(registryNames(ctx), EXPECTED)
   } finally { await shutdown(ctx) }
 })
-await test('real FastCtx calls return data and propagate server errors promptly', async () => {
+await test('PTC batch/result mount only in pure PTC scopes and withdraw on presentation teardown', async () => {
+  const { ctx } = await bootHost()
+  try {
+    await executor(ctx)
+    await ctx.plugin(inner => inner.provide('ptcRuntime', { language: 'typescript' }))
+    const component = await ctx.plugin(ptc, { binaryPath: resolveWorker(), required: true })
+    const native = await agent(ctx, 'ptc-native')
+    const pure = await agent(ctx, 'ptc-only')
+    let lift
+    await pure.ctx.plugin({ inject: ['tools'], apply(inner) { lift = inner.tools.presentAs('ptc') } })
+    await visible(ctx, pure, ['ops_batch', 'ops_result'])
+    for (const name of ['ops_batch', 'ops_result']) {
+      assert.equal(registryNames(ctx).includes(name), false)
+      assert.equal(scopedToolNames(ctx, native).includes(name), false)
+    }
+    const stale = ctx.get('tools').get('ops_result', pure)
+    lift()
+    assert.equal(scopedToolNames(ctx, pure).includes('ops_result'), false)
+    assert.equal((await stale.execute({ action: 'page', id: 'unused' }, { agent: pure, signal: new AbortController().signal })).error.code, 'POLICY_DENIED')
+    await component.dispose()
+    assert.equal((await sections(ctx, pure)).has('tools:ptc-only'), false)
+    assert.equal(registryHasOwnRegister(ctx), false)
+  } finally { await shutdown(ctx) }
+})
+await test('real native file calls return data and propagate errors promptly', async () => {
   const { ctx } = await bootHost()
   try {
     await fileMount(ctx)
     await withTempDir('glob', async dir => {
       fs.writeFileSync(path.join(dir, 'alpha.txt'), 'alpha\n')
       const agent = await agentForCall(ctx, dir)
+      const created = await callTool(ctx, publicToolName('write_file'), { path: 'created.txt', expectedRevision: 'absent', content: 'created' }, undefined, agent)
+      assert.equal(created.value.status, 'completed', JSON.stringify(created.value))
+      const stat = await callTool(ctx, publicToolName('stat'), { path: 'created.txt' }, undefined, agent)
+      assert.equal(stat.value.revision, created.value.revision)
       const result = await callTool(ctx, publicToolName('glob'), { pattern: ['*.txt'], path: dir }, undefined, agent)
       assert.match(result.text, /alpha\.txt/)
       assert.equal(fs.realpathSync.native(result.value.items[0]), fs.realpathSync.native(path.join(dir, 'alpha.txt')))
@@ -155,7 +194,7 @@ await test('the file component renders its live tools and retires both legacy se
 await test('optional missing runtime degrades honestly, required runtime rejects activation', async () => {
   const { ctx } = await bootHost()
   try {
-    const binaryPath = path.join(process.cwd(), 'no-such-fastctx.exe')
+    const binaryPath = path.join(process.cwd(), 'no-such-worker.exe')
     const { fiber } = await mountPlugin({ ctx, config: { binaryPath }, expectTools: 0 })
     assert.deepEqual(publicToolNames(ctx), [])
     assert.equal((await sections(ctx)).get(FILE_SECTION) ?? '', '')
@@ -189,7 +228,10 @@ await test('bash is scoped to authorized sessions, responds to mode changes, and
     await ctx.serial('session/event', full.session, { type: 'sandbox/mode' })
     await visible(ctx, full, [BASH_TOOL])
     if (process.platform === 'win32') {
-      await assert.rejects(() => definition.execute({ command: 'echo no' }, { agent: full }), /supported MSYS payload layout/)
+      const restrictedResult = await definition.execute({ command: 'echo no' }, { agent: full, signal: new AbortController().signal })
+      assert.equal(restrictedResult.status, 'failed')
+      assert.match(restrictedResult.error, /EXECUTOR_UNAVAILABLE/)
+      assert.equal(restrictedResult.permission, undefined)
     } else {
       const value = await definition.execute({ command: 'echo no' }, { agent: full, signal: new AbortController().signal })
       assert.equal(value.sandbox.mode, 'read-only')
@@ -241,139 +283,80 @@ await test('advise preserves host tools; explicit deny works without ops command
     for (const dispose of disposers) dispose()
   } finally { await shutdown(ctx) }
 })
-await test('file/background share runtime, but command tools never leak into global or restricted scopes', async () => {
+await test('a file row written by an earlier bundle still mounts and publishes its tools', async () => {
+  // Every existing profile's file row carries the FastCtx-only keys until config update 2 rewrites
+  // it; activation must not fail on them in between.
   const { ctx } = await bootHost()
   try {
-    await executor(ctx)
-    const file = await fileMount(ctx)
-    // The background lane publishes its command tools only when a bash executor
-    // is resolvable (`FastCtxTools.shellAllowed`), and the shipped default
-    // refuses an unpinned system shell. Resolve a real bash for this host the
-    // way an operator would, then hand it over explicitly, so the scoping
-    // assertions below are exercised on every platform instead of only where a
-    // bundled Windows payload happens to exist.
-    const hostShells = resolveShells({ allowSystemShellFallback: true })
-    assert.ok(hostShells.bash.available, 'this fixture drives real command tools and needs a real bash on this host')
-    const background = await component(ctx, 'background', { bashPath: hostShells.bash.file })
-    const full = await agent(ctx, 'background-full')
-    const jobs = BACKGROUND_TOOLS.map(publicToolName)
-    await visible(ctx, full, jobs)
-    const child = await agent(ctx, 'background-restricted', 'read-only', full)
-    await waitFor(() => jobs.every(name => !scopedToolNames(ctx, child).includes(name)), { timeoutMs: 5000 })
-    assert.deepEqual(registryNames(ctx), EXPECTED)
-    assert.equal(scopedToolNames(ctx, full).includes('ops_run'), false)
-    assert.match((await sections(ctx, full)).get(BG_SECTION), /Only operate on job IDs you started/)
-    await file.fiber.dispose()
-    await visible(ctx, full, jobs)
+    await ctx.plugin(Subprocess)
+    await ctx.plugin(Sandbox, {})
+    await ctx.plugin(inner => inner.provide('sandboxPolicy', {
+      resolve: ({ session }) => ({ mode: session.mode, workspaceRoot: session.header.cwd, sessionId: session.id }),
+    }))
+    const file = await component(ctx, 'file', LEGACY_ROWS.file)
+    await waitFor(() => publicToolNames(ctx).length === EXPECTED.length, { timeoutMs: 10000, what: EXPECTED.join(', ') })
+    assert.deepEqual(publicToolNames(ctx), EXPECTED)
+    const rendered = await sections(ctx)
+    for (const name of EXPECTED) assert.ok(rendered.get(FILE_SECTION).includes(name))
+    assert.equal(rendered.has(BG_SECTION), false)
+    await file.dispose()
+    assert.deepEqual(publicToolNames(ctx), [])
+  } finally { await shutdown(ctx) }
+})
+await test('an old background row loads as a no-op: no tools, no section, one warning', async () => {
+  const { ctx } = await bootHost()
+  const warnings = []
+  ctx.logger.exporter({ levels: { default: 4 }, export(message) { warnings.push(message.args.join(' ')) } })
+  try {
+    const url = pathToFileURL(path.join(PACKAGE_ROOT, 'lib', 'components', 'background', 'index.js')).href
+    const stub = await import(`${url}?tag=${Date.now()}`)
+    assert.equal(stub.name, 'dsh-ops-background')
+    // Any config is accepted, including keys no component has ever validated.
+    const fiber = await ctx.plugin(stub, { ...LEGACY_ROWS.background, serverName: 'fastctx', bashPath: '/x', unknownKey: 1 })
+    await new Promise(resolve => setImmediate(resolve))
     assert.deepEqual(registryNames(ctx), [])
-    await background.dispose()
-    assert.equal(jobs.some(name => scopedToolNames(ctx, full).includes(name)), false)
-    assert.equal((await sections(ctx, full)).has(BG_SECTION), false)
+    assert.deepEqual(publicToolNames(ctx), [])
+    const shown = await agent(ctx, 'background-stub')
+    for (const name of ['ops_run', 'ops_run_background', 'ops_job_output', 'ops_job_list', 'ops_job_kill']) {
+      assert.equal(scopedToolNames(ctx, shown).includes(name), false, `${name} is not published`)
+    }
+    assert.equal((await sections(ctx, shown)).has(BG_SECTION), false)
+    const removed = warnings.filter(message => message.includes('dsh-ops/background component (FastCtx background jobs) was removed'))
+    assert.equal(removed.length, 1, `exactly one removal warning: ${JSON.stringify(warnings)}`)
+    assert.match(removed[0], /Delete this row/)
+    await fiber.dispose()
   } finally { await shutdown(ctx) }
 })
-await test('the job lane resolves a bash the Windows way, so the shell component rung never reaches it', async () => {
-  // `lib/tools.js` asks with `posix: false`: the FastCtx job lane is Windows-only in 0.3.1 (the
-  // pinned payload and the IPC proxies are, and `dsh-plugin.json` declares that). Without the fence
-  // the shell component's POSIX rung would hand this lane a host bash and publish job tools on Linux
-  // in danger-full-access — a surface nothing has verified.
-  const windowsWay = resolveShells({}, { posix: false }).bash
-  const componentWay = resolveShells({}).bash
-  if (process.platform === 'win32') {
-    // Where a pinned payload exists the two are the same question, so the lane is unchanged there.
-    assert.deepEqual(windowsWay, componentWay)
-    return
-  }
-  assert.equal(componentWay.available, true, 'the shell component resolves this host bash')
-  assert.equal(windowsWay.available, false, JSON.stringify(windowsWay))
-  assert.equal(windowsWay.source, 'disabled')
-  // `allowSystemShellFallback: true` remains the operator's explicit opt-in for an unpinned system
-  // shell, and it already reached a PATH bash on Linux before this rung existed. That is unchanged
-  // and deliberate: the fence is on the *implicit* answer, not on the documented opt-in.
-  // And the lane really spawns that way: `#connect` pins the executor it chose into the child's
-  // environment, so reading it back is the observation that the fence reached the spawn rather than
-  // stopping at the resolver.
-  const surface = new FastCtxTools({
-    ctx: { tools: { register() { return () => {} } } },
-    config: resolveConfig({ toolCallTimeoutMs: 5000 }),
-    runtime: resolveRuntime(),
-    report: () => {},
-  })
-  try {
-    await surface.start()
-    if (process.platform !== 'linux') return // /proc process-environment observation is Linux-specific.
-    const env = fs.readFileSync(`/proc/${surface.client.child.pid}/environ`, 'utf8')
-    assert.ok(!env.includes('FASTCTX_BASH=/bin/bash') && !env.includes('FASTCTX_BASH=/usr/bin/bash'),
-      `the lane must not hand FastCtx a host bash: ${env.split('\0').filter(entry => entry.startsWith('FASTCTX_BASH=')).join(', ')}`)
-    assert.ok(env.includes('FASTCTX_BASH='), 'the lane must still pin its executor explicitly')
-  } finally { await surface.stop() }
+await test('the host half refuses to mount a background component itself', () => {
+  assert.throws(() => applyComponent({}, {}, 'background'), /unknown component "background"/)
 })
-await test('a dead server withdraws and republishes real file tools', async () => {
-  const registered = new Map(), messages = []
-  const surface = new FastCtxTools({ ctx: { tools: { register(definition) {
-    registered.set(definition.name, definition); return () => registered.delete(definition.name)
-  } } }, config: resolveConfig({ enableShellTools: false, toolCallTimeoutMs: 5000 }), runtime: resolveRuntime(),
-    report: message => messages.push(message) })
-  try {
-    assert.deepEqual((await surface.start()).sort(), EXPECTED)
-    surface.client.child.kill()
-    await waitFor(() => !surface.client, { timeoutMs: 5000 })
-    assert.deepEqual([...registered.keys()], [])
-    await waitFor(() => surface.names().length === EXPECTED.length, { timeoutMs: 10000 })
-    assert.ok(messages.some(message => message.includes('reconnected')))
-  } finally { await surface.stop() }
-  assert.equal(registered.size, 0)
-})
-await test('missing approved bash blocks background publication and isolates shared runtime policy', async () => {
+await test('real file replacement surface hides duplicates, keeps the PTC transport visible, and never publishes unready processes', async () => {
   const { ctx } = await bootHost()
   try {
-    await executor(ctx)
     await fileMount(ctx)
-    const ready = []
-    ctx.logger.exporter({ levels: { default: 4 }, export(message) { ready.push(message.args.join(' ')) } })
-    const previous = process.env.FASTCTX_BASH
-    process.env.FASTCTX_BASH = process.execPath
-    let background
-    try {
-      background = await component(ctx, 'background', { bashPath: path.join(process.cwd(), 'absent-approved-bash.exe') })
-      // A conflicting file lease with an approved executor must not lend its
-      // executor to this background component. Inspect its real model surface.
-      await waitFor(() => ready.some(message => message.includes('background component')), { timeoutMs: 5000, what: 'background handshake with disabled executor' })
-      const full = await agent(ctx, 'no-approved-executor')
-      await new Promise(resolve => setImmediate(resolve))
-      for (const name of BACKGROUND_TOOLS.map(publicToolName)) assert.equal(scopedToolNames(ctx, full).includes(name), false)
-      assert.deepEqual(registryNames(ctx), EXPECTED)
-      assert.equal(((await sections(ctx, full)).get(BG_SECTION) ?? ''), '')
-    } finally {
-      if (previous === undefined) delete process.env.FASTCTX_BASH
-      else process.env.FASTCTX_BASH = previous
-      await background?.dispose()
-    }
+    for (const name of ['read', 'glob', 'grep', process.platform === 'win32' ? 'pwsh' : 'bash']) ctx.tools.register(foreignTool(name))
+    const { apply: hideOfficial } = await import('../lib/official-tool-hiding.js')
+    const hiding = await ctx.plugin({ name: 'real-file-takeover', apply: hideOfficial }, {})
+    await new Promise(resolve => setImmediate(resolve))
+    const current = await agent(ctx, 'real-file-takeover')
+    const assembly = await ctx.get('systemPrompt').assemble({ scope: current })
+    const names = assembly.tools.map(tool => tool.name)
+    for (const name of ['read', 'glob', 'grep']) assert.equal(names.includes(name), false)
+    for (const name of EXPECTED) assert.ok(names.includes(name))
+    assert.equal(new Set(names).size, names.length)
+    assert.equal(names.some(name => name.startsWith('ops_process_')), false)
+    ctx.provide('ptcRuntime', { language: 'typescript' })
+    const restore = current.ctx.tools.presentAs('both')
+    // run_code is inside the PTC face with no reviewed replacement, so strict
+    // keeps it visible and warns instead of failing the session (#238).
+    const withTransport = await ctx.get('systemPrompt').assemble({ scope: current })
+    const transported = withTransport.tools.map(tool => tool.name)
+    assert.ok(transported.includes('run_code'))
+    assert.equal(transported.includes('read'), false)
+    restore()
+    await ctx.get('systemPrompt').assemble({ scope: current })
+    await hiding.dispose()
+    assert.ok(scopedToolNames(ctx, current).includes('read'))
   } finally { await shutdown(ctx) }
-})
-
-await test('FastCtx child drops credentials and DSH facts', () => {
-  const env = childEnv({ PATH: 'C:\\bin', HOME: 'C:\\home', GH_CONFIG_DIR: 'C:\\gh', GH_TOKEN: 'fixture', DSH_HOME: 'C:\\dsh', DEEPSEEK_API_KEY: 'fixture' })
-  assert.equal(env.PATH, 'C:\\bin'); assert.equal(env.GH_CONFIG_DIR, 'C:\\gh')
-  for (const key of ['GH_TOKEN', 'DSH_HOME', 'DEEPSEEK_API_KEY']) assert.equal(Object.hasOwn(env, key), false)
-})
-
-// The allow-list must withhold every name a credential can hide behind — not only
-// the ones that spell it out. `SSH_AUTH_SOCK` authorises the host's SSH keys and
-// `DATABASE_URL` normally carries a password; both slipped through the earlier
-// `KEY|PASSWORD|SECRET|TOKEN` deny-list, which is why this list exists.
-await test('FastCtx child withholds credential-shaped names a deny-list would miss', () => {
-  const env = childEnv({
-    PATH: 'C:\\bin', TEMP: 'C:\\tmp', LANG: 'zh_CN', LC_ALL: 'zh_CN.UTF-8', HTTPS_PROXY: 'http://proxy:1',
-    SSH_AUTH_SOCK: '\\\\.\\pipe\\openssh-ssh-agent', DATABASE_URL: 'postgres://u:p@h/db',
-    AWS_SECRET_ACCESS_KEY: 'fixture', AWS_SESSION_TOKEN: 'fixture', GITHUB_TOKEN: 'fixture',
-    npm_config__authToken: 'fixture', DSH_HOME: 'C:\\dsh',
-  })
-  for (const key of ['SSH_AUTH_SOCK', 'DATABASE_URL', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'GITHUB_TOKEN', 'npm_config__authToken', 'DSH_HOME']) {
-    assert.equal(Object.hasOwn(env, key), false, `${key} must not reach a child`)
-  }
-  // ...while a child still receives what it needs to run.
-  for (const [key, value] of Object.entries({ PATH: 'C:\\bin', TEMP: 'C:\\tmp', LANG: 'zh_CN', LC_ALL: 'zh_CN.UTF-8', HTTPS_PROXY: 'http://proxy:1' })) {
-    assert.equal(env[key], value, `${key} must survive the scrub`)
-  }
 })
 report('mount')

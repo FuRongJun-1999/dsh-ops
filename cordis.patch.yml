@@ -1,5 +1,12 @@
-# Four independent components. PTC is opt-in, scoped to pure PTC sessions.
-# Legacy shell and file stay enabled; neither is required by the PTC component.
+
+# Six independent components. PTC enhancement and shell are enabled by default;
+# PTC capabilities are still published only to authoritative PTC-only sessions.
+# The read-only TUI panel and strict official-tool hiding remain opt-in.
+# The panel row is inserted enabled so its config is addressable in the settings
+# editor, and its own switch (`capture`, the settings item 「启动数据检测」) is off
+# by default: an untouched row registers nothing and writes nothing.
+# Explicit existing profile choices are not migrated or overwritten.
+# The former dsh-ops/background row is no longer inserted; existing rows load as a no-op stub.
 - insert:
     - id: dsh-ops-shell
       name: dsh-ops/shell
@@ -12,19 +19,28 @@
       name: dsh-ops/file
       config:
         promptPolicy: true
-        enableShellTools: false
         required: false
-        toolCallTimeoutMs: 300000
-    - id: dsh-ops-background
-      name: dsh-ops/background
-      disabled: true
-      config:
-        promptPolicy: true
-        enableShellTools: true
-        required: false
-        toolCallTimeoutMs: 300000
     - id: dsh-ops-ptc
       name: dsh-ops/ptc
-      disabled: true
       config:
         required: false
+    - id: dsh-ops-panel
+      name: dsh-ops/panel
+      config:
+        # 「启动数据检测」: off by default; on writes <cwd>/.dsh-ops/panel/.
+        capture: false
+        textLimit: 2000
+        maxSessionBytes: 8388608
+    - id: dsh-ops-tui
+      name: dsh-ops/tui
+      disabled: true
+      config:
+        maxSessions: 32
+        maxActive: 128
+        recentLimit: 8
+    - id: dsh-ops-hide-official
+      name: dsh-ops/hide-official
+      disabled: true
+      config:
+        strict: true
+        additionalOfficialTools: []

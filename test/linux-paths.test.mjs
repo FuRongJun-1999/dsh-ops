@@ -177,7 +177,7 @@ await test('a symlink is refused even when it stays inside the root', async () =
       for (const name of ['in-root.txt', 'escaping.txt', 'dangling.txt']) {
         const refused = envelopeOf(await callTool('inspect_local_file', { path: at(name) }, { root: workspace }), assert)
         assert.equal(refused.status, 'error', `${name} was traversed: ${JSON.stringify(refused)}`)
-        assert.equal(refused.error.code, 'POLICY_DENIED', `${name} => ${refused.error.code}`)
+        assert.equal(refused.error.code, 'PATH_RESTRICTED', `${name} => ${refused.error.code}`)
         assert.match(refused.error.message, /not traversed/)
       }
       const globbed = envelopeOf(await callTool('glob', { path: workspace, pattern: ['**/*'] }, { root: workspace }), assert)

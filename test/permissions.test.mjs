@@ -4,19 +4,40 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import Sandbox from '@deepseek-ai/dsh-sandbox-local'
 import Subprocess from '@deepseek-ai/dsh-subprocess-local'
-import { assert, test, report, withTempDir, ownWindowsFixture } from './lib/harness.mjs'
+import { assert, test, report, skipSuite, withTempDir, ownWindowsFixture } from './lib/harness.mjs'
 import { bootHost, shutdown } from './lib/host.mjs'
 import { prepareWorkspace, mountWorkspacePreparation, runPreparation, preparationEnvironment, preparationSpawnSpec } from '../lib/workspace-preparation.js'
 import { invoke as fileCall } from '../lib/file/worker.js'
 import { invoke as ptcCall } from '../lib/ptc/worker.js'
-import { resolveWorker } from '../lib/ptc/runtime.js'
+import { tryResolveWorker } from '../lib/ptc/runtime.js'
 import { mountSessionBash } from '../lib/session-shells.js'
 import { resolveShells } from '../lib/shells.js'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import NodePtc from '@deepseek-ai/dsh-ptc-runtime-node'
 import FileSystem from '@deepseek-ai/dsh-fs-local'
 import * as ObservationPolicy from '@deepseek-ai/dsh-fs-observation-policy'
-const worker = resolveWorker()
+/**
+ * The worker this suite drives, or a visible skip.
+ *
+ * `resolveWorker()` throws when the host is outside the support matrix
+ * (`lib/ptc/runtime.js`), and that exception used to be raised while this module
+ * was still loading: such a host died with an uncaught error before a single
+ * check was named. Resolve it through `tryResolveWorker` and exit through the
+ * repository's skip convention, so a host that cannot answer says so and
+ * `test/run.mjs` counts it apart from the suites that ran. On a supported host
+ * with the worker built, resolution succeeds and every check below runs exactly
+ * as before.
+ */
+let worker
+{
+  const attempt = tryResolveWorker()
+  if (!attempt.ok) {
+    const reason = `this host cannot resolve the native worker (${attempt.reason})`
+    if (process.env.DSH_OPS_REQUIRE_RUNTIME === '1') throw new Error(reason)
+    skipSuite('permissions', reason)
+  }
+  worker = attempt.file
+}
 function ps(code) {
   // The interpreter here is the inbox 5.1 one, and a pwsh 7 host publishes its own module directories
   // into the **process-level** `PSModulePath`; 5.1 then resolves `Microsoft.PowerShell.Security` to
@@ -54,8 +75,7 @@ await test('the real worker behaves as the file-tool descriptions say (#44)', as
       assert.deepEqual(names(grep),['sub/nested.md','top.md'])
       // replace matches literal text: "a.b" does not match "axb".
       const replaced=await call('replace',{path:'a.txt',pattern:'a.b',replacement:'Z'})
-      assert.equal(replaced.changed,1,JSON.stringify(replaced))
-      assert.equal(fs.readFileSync(path.join(root,'a.txt'),'utf8'),'Z axb\n')
+      assert.equal(replaced.changed,1,JSON.stringify(replaced)); assert.equal(fs.readFileSync(path.join(root,'a.txt'),'utf8'),'Z axb\n')
     } finally { await shutdown(ctx) }
   })
 })
@@ -194,10 +214,14 @@ await test('an inheriting (AI) workspace root keeps its inheritance and descenda
     for(let d=0;d<10;d++) { const dir=path.join(ws,`d${d}`,'deep'); fs.mkdirSync(dir,{recursive:true}); for(let f=0;f<30;f++) fs.writeFileSync(path.join(dir,`f${f}.txt`),'x') }
     const sddl=target=>ps(`(Get-Acl -LiteralPath '${target.replaceAll("'","''")}').GetSecurityDescriptorSddlForm('Access')`)
     const aces=text=>text.match(/\([^)]*\)/g) ?? []
+    // SDDL names the current user by SID, except the built-in Administrator (RID 500), which it
+    // prints as the alias LA (as on hosted CI runners). Match either, not one machine's identity.
+    const trustees=[sid, ...(sid.endsWith('-500') ? ['LA'] : [])]
+    const mine=ace=>trustees.some(trustee=>ace.endsWith(`;;;${trustee})`))
     const deep=path.join(ws,'d9','deep','f29.txt'), deepDir=path.join(ws,'d9','deep')
     const before={root:sddl(ws),deep:sddl(deep),deepDir:sddl(deepDir)}
     assert.ok(before.root.startsWith('D:AI('),`fixture root must be auto-inherited, not protected: ${before.root}`)
-    assert.ok(aces(before.root).some(ace=>ace.includes(';;;LA') && ace.split(';')[1].includes('ID')),`fixture must carry an inherited user ACE: ${before.root}`)
+    assert.ok(aces(before.root).some(ace=>mine(ace) && ace.split(';')[1].includes('ID')),`fixture must carry an inherited user ACE: ${before.root}`)
     const backups=path.join(process.env.DSH_HOME,'dsh-ops','acl-backups')
     const receipts=()=>fs.existsSync(backups) ? fs.readdirSync(backups).length : 0
     const initial=receipts()
@@ -205,9 +229,9 @@ await test('an inheriting (AI) workspace root keeps its inheritance and descenda
     const after=sddl(ws)
     assert.ok(after.startsWith('D:AI('),`auto-inherited flag kept: ${before.root} -> ${after}`)
     for(const ace of aces(before.root)) assert.ok(aces(after).includes(ace),`inherited ACE kept: ${ace} in ${after}`)
-    const added=aces(after).filter(ace=>!aces(before.root).includes(ace) && ace.includes(';;;LA'))
+    const added=aces(after).filter(ace=>!aces(before.root).includes(ace) && mine(ace))
     assert.ok(added.length<=1,`at most one user ACE added: ${after}`)
-    const userAce=aces(after).find(ace=>ace.includes(';;;LA') && (Number.parseInt(ace.slice(1,-1).split(';')[2],16) & 0x80000)!==0)
+    const userAce=aces(after).find(ace=>mine(ace) && (Number.parseInt(ace.slice(1,-1).split(';')[2],16) & 0x80000)!==0)
     assert.ok(userAce || /0x1b01bf|0x1301bf/.test(after),`user WRITE_OWNER rights are present: ${after}`)
     const rights=ps(`(Get-Acl -LiteralPath '${quoted}').Access | ForEach-Object { $_.FileSystemRights.ToString() }`)
     assert.match(rights,/FullControl|Modify/,'the root retains an explicit usable ACL')
@@ -338,11 +362,11 @@ await test('owned Modify-only workspace starts real DSH sandbox; three modes and
         assert.equal(result.exitCode,0,JSON.stringify(result));assert.equal(result.stdout.text,'READ_OK')
         result=await bash.execute({command:"printf bad > denied.txt",workdir:root,timeoutMs:10000},exec)
         assert.notEqual(result.exitCode,0); assert.ok(!fs.existsSync(path.join(root,'denied.txt')))
-        assert.equal(result.permission?.code,'POLICY_DENIED',JSON.stringify(result))
+        assert.equal(result.restriction?.code,'EXECUTION_RESTRICTED',JSON.stringify(result))
         agent.session.mode='workspace-write'
         result=await bash.execute({command:"printf forbidden > outside.txt",workdir:outside,timeoutMs:10000},exec)
         assert.notEqual(result.exitCode,0,JSON.stringify(result))
-        assert.equal(result.permission?.code,'POLICY_DENIED',JSON.stringify(result))
+        assert.equal(result.restriction?.code,'EXECUTION_RESTRICTED',JSON.stringify(result))
         assert.ok(!fs.existsSync(path.join(outside,'outside.txt')))
         result=await bash.execute({command:"printf allowed > allowed.txt",workdir:root,timeoutMs:10000},exec)
         assert.equal(result.exitCode,0,JSON.stringify(result));assert.equal(fs.readFileSync(path.join(root,'allowed.txt'),'utf8'),'allowed')
@@ -368,13 +392,13 @@ await test('owned Modify-only workspace starts real DSH sandbox; three modes and
         assert.equal(completion[name].sandbox.mode,'workspace-write')
       }
       assert.match(ptcText,/PTC_OK/);assert.match(ptcText,/SCRIPT_OK/);assert.match(ptcText,/PIPE_OK/)
-      assert.equal(completion.denied.permission.code,'POLICY_DENIED')
+      assert.equal(completion.denied.restriction.code,'EXECUTION_RESTRICTED')
       assert.ok(!fs.existsSync(path.join(outside,'ptc-outside.txt')))
       assert.doesNotMatch(ptcText,/3221225794|EXECUTOR_UNAVAILABLE|fatal error/)
       agent.session.mode='read-only'
       const downgrade=await ctx.get('tools').execute({...request,callId:'ptc-bash-downgrade',arguments:{description:'Verify PTC permission downgrade',code:`return await tools.ops_bash({command:"printf blocked > ptc-readonly.txt",workdir:${JSON.stringify(root)},timeoutMs:10000});`}})
       assert.notEqual(downgrade.isError,true,JSON.stringify(downgrade))
-      assert.equal(downgrade.value.result.permission.code,'POLICY_DENIED')
+      assert.equal(downgrade.value.result.restriction.code,'EXECUTION_RESTRICTED')
       assert.ok(!fs.existsSync(path.join(root,'ptc-readonly.txt')))
       agent.session.mode='danger-full-access'
       result=await bash.execute({command:"printf 'FULL_OK'",workdir:outside,timeoutMs:10000},exec)

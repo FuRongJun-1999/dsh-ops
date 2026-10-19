@@ -93,9 +93,41 @@ Fixed since this change: `ops_inspect_local_file` and `ops_replace` report to th
 
 No. Fixed file operations follow a trusted-operation policy fence matching DSH fs-sandbox and **never execute model code**. Read-only rejects replacement, workspace-write permits writes under the workspace and DSH temporary areas, and full access adds no write fence.
 
-### Why are the background tools still unavailable after enabling them?
+### Credential locations are refused in every direction
 
-Once the `dsh-ops/background` component is enabled, session `danger-full-access` is still required to publish the four background tools.
+**This is by design.** The file tools refuse to touch a credential location (`~/.ssh`, `~/.aws`,
+`~/.config/gcloud`, `.netrc`, `.npmrc`, `.pypirc`, `id_rsa`/`id_ed25519`-style keys,
+`*credentials.{json,yaml,ini}`, `.env` and the DSH credential stores) and answer `CREDENTIAL_DENIED`:
+reads are refused, and so are writes, `copy`/`move` destinations, `replace` targets and `remove`.
+`glob` and `grep` never list those paths either. Under `danger-full-access` the DSH permission mode
+would allow the writes, so this fence is what keeps a credential file from being created, overwritten
+or deleted through the file tools.
+
+The configuration key is still named `denyCredentialReads` for compatibility, but its scope includes
+writes. Practical consequence: a file named `.env` **cannot be created through the ops tools**. Write
+it with the host `write` tool instead (the host is fenced by the DSH permission mode, not by this
+fence). `denyCredentialReads: false` on a row disables this fence for that row only;
+`DSH_OPS_DENY_READ` can only add locations, never remove one.
+
+### A `.dsh-ops-update-*.lock` file appeared in a directory
+
+**This is a persistent cooperative lock, not debris.** Writers serialize on a hidden sidecar beside
+the target: `.dsh-ops-update-<sha256 of the file name>.lock`. It is created on first use and never
+unlinked, because the lock must keep the same identity across an atomic rename; deleting it would let
+two writers lock different objects under the same name. It is not a sign that an operation succeeded
+or failed, it never contains data, and `glob`, `grep` and directory-wide `replace` skip it.
+
+Requests refused before the lock is taken (stale `expectedRevision`, `EDIT_CONFLICT`, an existing
+destination, a credential path) no longer create one since this release. A request that fails *after*
+the lock is taken — a concurrent writer winning the race, or a publication failure — can still leave
+one behind, and a `replace` refused by `maxReplacements` can leave one per file the scan
+opened (not only the files that matched).
+**Do not delete these files by hand**: removing a sidecar while another process may be waiting on it
+lets a later writer believe it is alone.
+
+### Where did the background tools go?
+
+The `dsh-ops/background` component and its FastCtx-backed tools (`ops_run`, `ops_run_background`, `ops_job_output`, `ops_job_list`, `ops_job_kill`) were removed. A profile row that still names `dsh-ops/background` loads as a no-op and logs `the dsh-ops/background component (FastCtx background jobs) was removed in this version; it publishes no tools`; delete the row to silence it. For a long-running process, use the host `pwsh` tool's `run_in_background`, or detach inside an `ops_bash` command (for example `nohup ... & disown`).
 
 ### `DSH workspace preparation failed`
 
@@ -130,7 +162,7 @@ The ordinary DSH CLI cannot manage the reserved `desktop` profile; do not confus
 
 ### `~/.fastctx/` survives uninstallation
 
-Persistent state is kept by default; add `--purge-fastctx` explicitly if you want it removed.
+It is state left by the removed background component and is kept by default; add `--purge-fastctx` explicitly if you want it removed.
 
 ### Legacy provisioned files were not cleaned up
 
@@ -140,9 +172,9 @@ Legacy explicitly provisioned `<DSH_HOME>/dsh-ops/` files must be cleaned separa
 
 ## Processes
 
-### Is the `runtime-host` process a leak?
+### Is a leftover `runtime-host` process a leak?
 
-No. It is a reusable upstream shared process; a dead parent alone is not a leak. With no clients and about ten minutes of inactivity, it exits normally. Do not kill it by process-name sweeps. This release does not automatically sweep processes left by older versions.
+No. It is FastCtx's reusable shared process, started by earlier versions with the background component; this version starts none. With no clients and about ten minutes of inactivity, it exits normally. Do not kill it by process-name sweeps. This release does not automatically sweep processes left by older versions.
 
 ## macOS arm64
 
@@ -150,11 +182,8 @@ No. It is a reusable upstream shared process; a dead parent alone is not a leak.
 
 macOS ships no `@dsh-ops/bash-darwin-arm64` or `@dsh-ops/pwsh-darwin-arm64`
 package, and no portable upstream bash exists for macOS. Select the shell the
-plugin should use with `bashPath` (for example `/opt/homebrew/bin/bash`), and
-repeat that key on **every** row that needs bash: a `bashPath` on
-`dsh-ops/shell` alone leaves `dsh-ops/background` without a resolvable bash, and
-its four tools are then never published, without any error being reported.
-PowerShell 7 can be provisioned, but the host disables its `pwsh-sandbox` and
+plugin should use with `bashPath` (for example `/opt/homebrew/bin/bash`) on the
+`dsh-ops/shell` row. PowerShell 7 can be provisioned, but the host disables its `pwsh-sandbox` and
 `tool-pwsh` rows outside Windows, so no pwsh tool appears on macOS.
 
 ### The file tools reject a path under `/tmp`

@@ -36,21 +36,25 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 import { assert, report, test, withTempDir } from './lib/harness.mjs'
-import { callTool, requireWorker } from './lib/boundary.mjs'
+import { callTool, envelopeOf, requireWorker } from './lib/boundary.mjs'
 
 requireWorker('replace-concurrency')
 
 const WRITERS = 6
-const TRIALS = 3
+const TRIALS = process.platform === 'darwin' ? 10 : 3
 const FILLER = 1024 * 1024
 
 /** Read one call's outcome without throwing on any of them. */
 const outcome = result => {
-  if (result.timedOut || result.exitCode === null || result.spawnError) return { kind: 'crashed', detail: result.spawnError ?? 'timed out' }
-  const body = result.body
-  if (!body) return { kind: 'crashed', detail: `stdout was not JSON: ${result.parseError}` }
-  if (body.status === 'error') return { kind: 'refused', detail: body.code ?? body.message ?? 'error' }
-  return { kind: 'reported', changed: body.changed ?? 0, detail: body.status }
+  const body = envelopeOf(result, assert)
+  if (body.status === 'error') {
+    assert.equal(body.error?.code, 'REVISION_CONFLICT', JSON.stringify(body))
+    assert.equal(body.error.effectState, 'none', JSON.stringify(body))
+    return { kind: 'refused', detail: body.error.code }
+  }
+  assert.equal(body.status, 'completed', JSON.stringify(body))
+  assert.ok(body.changed === 0 || body.changed === 1, JSON.stringify(body))
+  return { kind: 'reported', changed: body.changed, detail: body.status }
 }
 
 await test('concurrent replaces never claim a change that did not survive', async () => {
@@ -62,20 +66,19 @@ await test('concurrent replaces never claim a change that did not survive', asyn
 
       const results = await Promise.all(
         Array.from({ length: WRITERS }, (_, index) =>
-          callTool('replace', { path: target, pattern: 'TOKEN', replacement: `TOKEN-${index + 1}` }, { root: workspace, timeoutMs: 60_000 }),
+          callTool('replace', { path: target, pattern: 'TOKEN', replacement: `WRITER-${index + 1}` }, { root: workspace, timeoutMs: 60_000 }),
         ),
       )
 
       const final = fs.readFileSync(target, 'utf8')
       const present = []
-      for (let writer = 1; writer <= WRITERS; writer += 1) if (final.includes(`TOKEN-${writer}`)) present.push(writer)
+      for (let writer = 1; writer <= WRITERS; writer += 1) if (final.includes(`WRITER-${writer}`)) present.push(writer)
 
       const claims = []
       const details = []
       results.forEach((result, index) => {
         const settled = outcome(result)
         details.push(`writer ${index + 1}: ${settled.kind}${settled.kind === 'reported' ? ` changed=${settled.changed}` : ` (${settled.detail})`}`)
-        if (settled.kind === 'crashed') return
         if (settled.kind === 'reported' && settled.changed > 0) claims.push(index + 1)
       })
 
@@ -89,7 +92,7 @@ await test('concurrent replaces never claim a change that did not survive', asyn
         present,
         `trial ${trial}: the callers reporting a change must be the ones whose change is in the file — ${details.join('; ')}`,
       )
-      assert.ok(final.includes('TOKEN-'), `trial ${trial}: the surviving replacement must be present`)
+      assert.ok(final.includes('WRITER-'), `trial ${trial}: the surviving replacement must be present`)
       assert.ok(!final.includes('\nTOKEN\n'), `trial ${trial}: the original pattern must be gone, not half-replaced`)
       assert.equal(final.startsWith('filler line'), true, `trial ${trial}: the untouched prefix must survive intact`)
     }

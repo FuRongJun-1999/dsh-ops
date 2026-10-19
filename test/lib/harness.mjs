@@ -174,9 +174,10 @@ export const SUITE_SKIPPED_EXIT = 77
 /**
  * Skip the whole suite, visibly, before any check has run.
  *
- * The caller decides when a suite cannot answer here — `mount.test.mjs` uses it
- * when no FastCtx runtime is resolvable — and the reason travels to the
- * summary, so "nothing ran" is never mistaken for "everything passed".
+ * The caller decides when a suite cannot answer here — `test/lib/boundary.mjs`
+ * uses it when no native worker is built, and POSIX-only suites use it on
+ * Windows — and the reason travels to the summary, so "nothing ran" is never
+ * mistaken for "everything passed".
  * @param {string} label - the suite label used in the summary line.
  * @param {string} reason - why this suite cannot run in this environment.
  * @returns {never} does not return.

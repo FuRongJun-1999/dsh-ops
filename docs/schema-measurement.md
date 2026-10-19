@@ -1,4 +1,8 @@
-# Schema measurement
+# Historical schema measurement
+
+> This document and `schema-current.json` describe the 0.2.x FastCtx surface only.
+> They are retained for historical token comparisons and are not a current default
+> surface or release gate.
 
 Manual measurement only; not a tokenizer, CI, or proof of whole-task savings.
 Metric: compact UTF-8 JSON `{name,description,parameters}` bytes, tokens ≈ ceil(bytes/4).
@@ -31,7 +35,8 @@ schemas 18,889 bytes; four file schemas 12,807. File descriptions remain 6,724 b
 (47.5% reduction). ops_grep: 3,766 → 2,019; inspect: 4,375 → 1,968. These are plugin
 old/new comparisons, NOT official-host versus plugin comparisons.
 
-Reproduce with `node scripts/measure-schemas.mjs docs/schema-current.json`.
-It initializes and lists schemas without tool execution. Preserve baseline JSON.
-Actual request count, cache pricing, tool output and repeated history can outweigh
+These figures were produced with `scripts/measure-schemas.mjs`, which shipped with
+the 0.2.x FastCtx line and is no longer in the repository, so they cannot be
+reproduced on the current package. Keep `schema-baseline.json` as the frozen
+comparison. Actual request count, cache pricing, tool output and repeated history can outweigh
 fixed schema savings; no percentage here predicts task-total provider tokens.

@@ -25,3 +25,13 @@ uuid = { version = "1.26", features = ["v4"] }
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[target.'cfg(windows)'.dependencies.dsh-ops-windows-metadata]
+path = "windows-metadata"
+
+[target.'cfg(target_os = "macos")'.dependencies.dsh-ops-darwin-metadata]
+path = "darwin-metadata"
+
+[workspace]
+members = ["windows-metadata", "darwin-metadata"]
+resolver = "3"

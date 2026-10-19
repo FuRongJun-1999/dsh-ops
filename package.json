@@ -22,13 +22,11 @@
     "arm64"
   ],
   "description": "Native file and PTC tools for DSH on Windows x64, Linux x64 and macOS Apple Silicon; Windows-only optional Bash and PowerShell 7 payloads",
-  "icon": "./icon.png",
+  "icon": "./docs/assets/icon.png",
   "keywords": [
     "dsh",
     "dsh-plugin",
     "deepseek-harness",
-    "mcp",
-    "fastctx",
     "repository-tools"
   ],
   "license": "MIT AND Apache-2.0",
@@ -62,7 +60,21 @@
       "default": "./lib/components/ptc/index.js"
     },
     "./ptc/package.json": "./lib/components/ptc/package.json",
-    "./ptc/locale/*.json": "./lib/components/ptc/locale/*.json"
+    "./ptc/locale/*.json": "./lib/components/ptc/locale/*.json",
+    "./panel": {
+      "default": "./lib/components/panel/index.js"
+    },
+    "./panel/package.json": "./lib/components/panel/package.json",
+    "./panel/locale/*.json": "./lib/components/panel/locale/*.json",
+    "./panel/icon": "./lib/components/panel/icon.png",
+    "./tui": { "default": "./lib/components/tui/index.js" },
+    "./tui/package.json": "./lib/components/tui/package.json",
+    "./tui/locale/*.json": "./lib/components/tui/locale/*.json",
+    "./hide-official": {
+      "default": "./lib/components/hide-official/index.js"
+    },
+    "./hide-official/package.json": "./lib/components/hide-official/package.json",
+    "./hide-official/locale/*.json": "./lib/components/hide-official/locale/*.json"
   },
   "bin": {
     "dsh-ops": "bin/dsh-ops.mjs"
@@ -77,46 +89,42 @@
     "bin",
     "cordis.patch.yml",
     "dsh-plugin.json",
-    "icon.png",
+    "docs/assets/icon.png",
     "locale",
     "docs",
     "LICENSE",
     "NOTICE",
+    "licenses",
     "README.md",
     "README.en.md",
     "README.zh.md",
-    "PROVENANCE.md",
-    "CHANGELOG.md",
+    "docs/PROVENANCE.md",
+    "docs/CHANGELOG.md",
     "runtime",
     "native/Cargo.toml",
     "native/Cargo.lock",
     "native/src",
-    "native/bash-ipc",
-    "vendor/fastctx/Cargo.toml",
-    "vendor/fastctx/Cargo.lock",
-    "vendor/fastctx/build.rs",
-    "vendor/fastctx/src",
-    "vendor/fastctx/third-party",
-    "vendor/fastctx/LICENSE-APACHE",
-    "vendor/fastctx/NOTICE",
-    "vendor/fastctx/THIRD_PARTY_LICENSES.md",
-    "vendor/fastctx/THIRD_PARTY_LICENSES_RUST.md",
-    "vendor/fastctx/FORK.md",
-    "vendor/fastctx/UPSTREAM.md"
+    "native/windows-metadata",
+    "native/darwin-metadata",
+    "native/bash-ipc"
   ],
   "scripts": {
-    "status": "node bin/dsh-ops.mjs status",
     "build:bash-ipc": "node bin/build-bash-ipc.mjs",
     "build:ptc": "node bin/dsh-ops.mjs build-ptc",
     "stage:ptc": "node bin/native-runtime.mjs stage",
     "check:ptc-runtime": "node bin/native-runtime.mjs check --staged",
     "test:ptc": "node test/run.mjs ptc",
-    "build:rust": "node bin/dsh-ops.mjs build",
-    "provision": "node bin/dsh-ops.mjs provision",
     "validate:manifest": "node scripts/validate-manifest.mjs",
+    "check:size": "node scripts/check-file-size.mjs",
     "test": "node test/run.mjs",
     "verify:release": "npm run verify && node bin/check-release.mjs",
-    "verify": "node scripts/validate-manifest.mjs && node test/run.mjs"
+    "verify": "node scripts/validate-manifest.mjs && node test/run.mjs",
+    "bench:cli": "node -e \"const fs=require('node:fs');if(!fs.existsSync('bench/cli.mjs')){console.error('bench/ is repository-only and never shipped in the npm package (bench 只存在于仓库,不随包发布); run npm run bench:* from a dsh-ops checkout');process.exit(2)};process.exit(require('node:child_process').spawnSync(process.execPath,['bench/cli.mjs',...process.argv.slice(1)],{stdio:'inherit'}).status??1)\" --",
+    "bench:setup": "node -e \"const fs=require('node:fs');if(!fs.existsSync('bench/cli.mjs')){console.error('bench/ is repository-only and never shipped in the npm package (bench 只存在于仓库,不随包发布); run npm run bench:* from a dsh-ops checkout');process.exit(2)};process.exit(require('node:child_process').spawnSync(process.execPath,['bench/cli.mjs','setup',...process.argv.slice(1)],{stdio:'inherit'}).status??1)\" --",
+    "bench:ab": "node -e \"const fs=require('node:fs');if(!fs.existsSync('bench/cli.mjs')){console.error('bench/ is repository-only and never shipped in the npm package (bench 只存在于仓库,不随包发布); run npm run bench:* from a dsh-ops checkout');process.exit(2)};process.exit(require('node:child_process').spawnSync(process.execPath,['bench/cli.mjs','ab',...process.argv.slice(1)],{stdio:'inherit'}).status??1)\" --",
+    "bench:report": "node -e \"const fs=require('node:fs');if(!fs.existsSync('bench/cli.mjs')){console.error('bench/ is repository-only and never shipped in the npm package (bench 只存在于仓库,不随包发布); run npm run bench:* from a dsh-ops checkout');process.exit(2)};process.exit(require('node:child_process').spawnSync(process.execPath,['bench/cli.mjs','report',...process.argv.slice(1)],{stdio:'inherit'}).status??1)\" --",
+    "bench:panel": "node -e \"const fs=require('node:fs');if(!fs.existsSync('bench/cli.mjs')){console.error('bench/ is repository-only and never shipped in the npm package (bench 只存在于仓库,不随包发布); run npm run bench:* from a dsh-ops checkout');process.exit(2)};process.exit(require('node:child_process').spawnSync(process.execPath,['bench/cli.mjs','panel',...process.argv.slice(1)],{stdio:'inherit'}).status??1)\" --",
+    "bench:tools": "node -e \"const fs=require('node:fs');if(!fs.existsSync('bench/cli.mjs')){console.error('bench/ is repository-only and never shipped in the npm package (bench 只存在于仓库,不随包发布); run npm run bench:* from a dsh-ops checkout');process.exit(2)};process.exit(require('node:child_process').spawnSync(process.execPath,['bench/cli.mjs','tools',...process.argv.slice(1)],{stdio:'inherit'}).status??1)\" --"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
@@ -132,9 +140,7 @@
   },
   "optionalDependencies": {
     "@dsh-ops/bash-win32-x64": "0.2.1",
-    "@dsh-ops/fastctx-win32-x64": "0.2.1",
-    "@dsh-ops/pwsh-win32-x64": "0.2.1",
-    "@fastctx/darwin-arm64": "0.2.6"
+    "@dsh-ops/pwsh-win32-x64": "0.2.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.4",
@@ -146,6 +152,8 @@
     "@deepseek-ai/dsh-subprocess": "0.2.0-rc.2",
     "@deepseek-ai/dsh-subprocess-local": "0.2.0-rc.2",
     "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tool-fs": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tool-fs-search": "0.2.0-rc.2",
     "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
     "@dsh-std/manifest": "0.1.1-rc.3",
     "yaml": "^2.9.1"

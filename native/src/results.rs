@@ -6,6 +6,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 #[derive(Serialize, Deserialize)]
 struct Record {
@@ -34,7 +35,7 @@ pub fn referenced_items(store: &Store, request: &Request, id: &str) -> Result<Ve
     {
         return Err(Failure::new("POLICY_DENIED", "Reference scope mismatch"));
     }
-    if record.expires < now() {
+    if record.expires <= now() {
         return Err(Failure::new(
             "REFERENCE_EXPIRED",
             "Result observation expired",
@@ -61,6 +62,7 @@ pub fn run(store: &Store, request: &Request) -> Result<Value> {
             let id = format!("r-{}", uuid::Uuid::new_v4());
             let expires = now() + TTL;
             let total = items.len();
+            let content_hash = content_hash(&items)?;
             store.save(
                 &id,
                 &Record {
@@ -73,7 +75,7 @@ pub fn run(store: &Store, request: &Request) -> Result<Value> {
                 },
             )?;
             Ok(
-                json!({ "id": id, "total": total, "expires": expires, "complete": false, "omitted": total, "nextAction": "Use page with this id; references grant no filesystem authority." }),
+                json!({ "id": id, "total": total, "sourceTotal": total, "contentHash": content_hash, "expires": expires, "complete": false, "omitted": total, "nextAction": "Use page with this id; references grant no filesystem authority." }),
             )
         }
         "page" | "release" => {
@@ -88,13 +90,19 @@ pub fn run(store: &Store, request: &Request) -> Result<Value> {
                 .as_deref()
                 .ok_or_else(|| Failure::new("INVALID_ARGUMENT", "Reference id required"))?;
             Store::validate_id(id)?;
-            let items = if id.starts_with("j-") {
+            let (items, expires) = if id.starts_with("j-") {
                 let job: Job = store.read(id)?;
                 batch::authorize(&job, request)?;
-                job.items
-                    .into_iter()
-                    .map(serde_json::to_value)
-                    .collect::<std::result::Result<Vec<_>, _>>()?
+                if args.action == "release" {
+                    return Err(Failure::new("INVALID_ARGUMENT", "Job audits are read-only and cannot be released"));
+                }
+                (
+                    job.items
+                        .into_iter()
+                        .map(serde_json::to_value)
+                        .collect::<std::result::Result<Vec<_>, _>>()?,
+                    None,
+                )
             } else {
                 let record: Record = store.read(id)?;
                 if record.version != 1
@@ -107,19 +115,19 @@ pub fn run(store: &Store, request: &Request) -> Result<Value> {
                         "Reference belongs to another scope",
                     ));
                 }
-                if record.expires < now() && args.action != "release" {
+                if record.expires <= now() && args.action != "release" {
                     return Err(Failure::new(
                         "REFERENCE_EXPIRED",
                         "Result expired; release it and acquire a new observation",
                     ));
                 }
-                record.items
+                (record.items, Some(record.expires))
             };
             if args.action == "release" {
                 store.release(id)?;
                 return Ok(json!({"id":id, "status":"released"}));
             }
-            page(items, &args, id)
+            page(items, &args, id, expires)
         }
         _ => Err(Failure::new(
             "INVALID_ARGUMENT",
@@ -127,7 +135,14 @@ pub fn run(store: &Store, request: &Request) -> Result<Value> {
         )),
     }
 }
-fn page(items: Vec<Value>, args: &ResultArgs, id: &str) -> Result<Value> {
+/** Hash the complete ordered rows, before filtering/projection; never a capability. */
+fn content_hash(items: &[Value]) -> Result<String> {
+    Ok(format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(items)?)
+    ))
+}
+fn page(items: Vec<Value>, args: &ResultArgs, id: &str, expires: Option<u64>) -> Result<Value> {
     let limit = args.limit.unwrap_or(64);
     let budget = args.max_bytes.unwrap_or(16_384);
     if limit == 0
@@ -144,6 +159,8 @@ fn page(items: Vec<Value>, args: &ResultArgs, id: &str) -> Result<Value> {
             "Invalid quantity or byte budget",
         ));
     }
+    let source_total = items.len();
+    let content_hash = content_hash(&items)?;
     let filtered: Vec<_> = items
         .into_iter()
         .filter(|item| {
@@ -168,7 +185,7 @@ fn page(items: Vec<Value>, args: &ResultArgs, id: &str) -> Result<Value> {
             item
         };
         result.push(item);
-        let candidate = json!({"id":id,"items":result,"total":total,"nextOffset":next+1,"complete":next+1==total,"omitted":total-(next+1)});
+        let candidate = json!({"id":id,"items":result,"sourceTotal":source_total,"contentHash":content_hash,"expires":expires,"total":total,"nextOffset":next+1,"complete":next+1==total,"omitted":total-(next+1)});
         // Reserve envelope room for host sandbox facts added after transport.
         if serde_json::to_vec(&candidate)?.len() + 128 > budget {
             result.pop();
@@ -183,6 +200,6 @@ fn page(items: Vec<Value>, args: &ResultArgs, id: &str) -> Result<Value> {
         next += 1;
     }
     Ok(
-        json!({"id":id,"items":result,"total":total,"nextOffset":next,"complete":next==total,"omitted":total-next}),
+        json!({"id":id,"items":result,"sourceTotal":source_total,"contentHash":content_hash,"expires":expires,"total":total,"nextOffset":next,"complete":next==total,"omitted":total-next}),
     )
 }

@@ -10,8 +10,8 @@
  *
  * THREE OUTCOMES, NOT TWO. A suite that cannot answer in this environment exits
  * with {@link SKIPPED_EXIT} (`skipSuite` in `test/lib/harness.mjs`) and is
- * counted as skipped, never as passed: a machine without a FastCtx build must
- * not be able to report a green runtime gate. `DSH_OPS_REQUIRE_RUNTIME=1` turns
+ * counted as skipped, never as passed: a machine without a native worker build
+ * must not be able to report a green runtime gate. `DSH_OPS_REQUIRE_RUNTIME=1` turns
  * such a skip into a failure here as well as in the suite, so the integration
  * job cannot silently lose the thing it exists to test.
  *
@@ -60,9 +60,43 @@ if (selected.length === 0) {
 let failed = 0
 let skipped = 0
 const requireRuntime = process.env.DSH_OPS_REQUIRE_RUNTIME === '1'
+
+/**
+ * Suites whose skip says something about *this machine*, not about the runtime being absent: they
+ * need an optional external checkout (`DSH_OPS_TUI_ROOT`, plus `DSH_OPS_TUI_WORKER` for the native
+ * one). Naming them in `DSH_OPS_ALLOW_SKIPS` keeps them skips even under
+ * `DSH_OPS_REQUIRE_RUNTIME=1`, whose whole point is to catch a *runtime* that is missing while a
+ * build claims otherwise. Unset means "no exceptions", so the default stays strict.
+ */
+const allowedSkips = new Set((process.env.DSH_OPS_ALLOW_SKIPS ?? '')
+  .split(',').map((name) => name.trim()).filter(Boolean))
+const isAllowedSkip = (label) => allowedSkips.has(label) || allowedSkips.has(label.replace(/\.test\.mjs$/, ''))
+/**
+ * The per-suite deadline. A loaded runner can cross any fixed number without the suite being wrong,
+ * so `DSH_OPS_SUITE_TIMEOUT_MS` can raise it; unset keeps the original 120s and the same contract.
+ */
+const SUITE_TIMEOUT_MS = (() => {
+  const raw = process.env.DSH_OPS_SUITE_TIMEOUT_MS
+  if (raw === undefined || raw === '') return 120_000
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value <= 0) {
+    console.error(`dsh-ops test: invalid DSH_OPS_SUITE_TIMEOUT_MS: ${raw}`)
+    process.exit(2)
+  }
+  return value
+})()
+
+/**
+ * A deadline is the environment's answer, not the suite's. Retrying a timeout once, when asked,
+ * separates a loaded runner from a real regression; a logic failure is never retried, and every
+ * retry prints, so a green summary still shows that it happened. Unset means "do not retry".
+ */
+const RETRY_TIMEOUTS = process.env.DSH_OPS_RETRY_TIMEOUTS === '1'
+
 const started = Date.now()
 
-for (const suite of selected) {
+/** Run one suite in its own process, with a throwaway DSH_HOME and a bounded deadline. */
+async function runSuite(suite) {
   const home = mkdtempSync(path.join(tmpdir(), 'dsh-ops-test-home-'))
   const label = path.basename(suite)
   console.log(`\n=== ${label}`)
@@ -74,19 +108,29 @@ for (const suite of selected) {
   let timedOut = false
   const timer = setTimeout(() => {
     timedOut = true
-    console.error(`--- ${label} exceeded the 120s suite deadline; stopping its owned process tree`)
+    console.error(`--- ${label} exceeded the ${Math.round(SUITE_TIMEOUT_MS / 1000)}s suite deadline; stopping its owned process tree`)
     if (process.platform === 'win32') {
       spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', timeout: 10000 })
     } else child.kill('SIGKILL')
-  }, 120000)
+  }, SUITE_TIMEOUT_MS)
   const status = await new Promise(resolve => {
     child.once('error', error => { console.error(String(error)); resolve(null) })
     child.once('close', code => resolve(code))
   })
   clearTimeout(timer)
   rmSync(home, { recursive: true, force: true })
+  return { label, status, timedOut }
+}
+
+for (const suite of selected) {
+  let { label, status, timedOut } = await runSuite(suite)
+  if (timedOut && RETRY_TIMEOUTS) {
+    console.error(`--- ${label} retrying once: that deadline was about the runner, not the suite`)
+    ;({ label, status, timedOut } = await runSuite(suite))
+    console.log(`--- ${label} ${timedOut ? 'timed out again' : `passed on the retry (exit ${status})`}`)
+  }
   if (status === SKIPPED_EXIT && !timedOut) {
-    if (requireRuntime) {
+    if (requireRuntime && !isAllowedSkip(label)) {
       // A skip is the suite's way of saying "this environment cannot answer".
       // When the caller has said the runtime is required, that is a failure —
       // at both layers, so neither one alone can turn it back into a pass.

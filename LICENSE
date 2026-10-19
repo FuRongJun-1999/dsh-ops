@@ -23,8 +23,8 @@ SOFTWARE.
 -------------------------------------------------------------------------------
 
 This MIT license covers the dsh-ops plugin: everything in this repository
-except `vendor/fastctx/`, which is FastCtx under the Apache License 2.0. The
-distribution as a whole is therefore licensed under the composite
+except `licenses/fastctx/`, which holds FastCtx's Apache License 2.0 text and
+upstream notice. The distribution as a whole is licensed under the composite
 `MIT AND Apache-2.0`. See `NOTICE` for the full statement and the attribution
-FastCtx requires, and `vendor/fastctx/LICENSE-APACHE` for the Apache License
+FastCtx requires, and `licenses/fastctx/LICENSE-APACHE` for the Apache License
 2.0 text.

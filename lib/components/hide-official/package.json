@@ -1,0 +1,6 @@
+{
+  "name": "dsh-ops-hide-official",
+  "description": "Strict scoped takeover of official tools, with replacement readiness and fail-closed surface verification.",
+  "icon": "./icon.png",
+  "type": "module"
+}

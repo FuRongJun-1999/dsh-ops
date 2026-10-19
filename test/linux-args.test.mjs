@@ -18,6 +18,10 @@
  *   whoever unifies them has to update this suite deliberately.
  * - `multiline` means per-line anchors, not cross-line matching (report L6):
  *   `^beta$` matches, `alpha\nbeta` does not.
+ * - `ops_glob` `details` timestamps are real epoch milliseconds and
+ *   `sort: "modified"` orders by them, newest first, with equal timestamps left
+ *   in the walk's path order (#236); and a refused update leaves exactly the
+ *   documented update-lock sidecar beside its target and nothing else (#240 P5).
  *
  * Platform. The subject is JSON argument handling in the native worker, plus
  * filesystem-neutral fixtures, so every case runs on win32 as well. The one
@@ -36,6 +40,7 @@
  * @module dsh-ops/test/linux-args
  */
 
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -288,6 +293,157 @@ await test('bounded hostile input stays bounded: a huge grep pattern and a 128 K
     assert.equal(read.items[0].truncatedInLine, true)
     assert.equal(read.items[0].bytesTotal, 128 * 1024)
     assert.ok(read.items[0].text.length < 128 * 1024)
+  })
+})
+
+await test('the update lock file is invisible to a walk, a grep and a replace plan', async () => {
+  // `ops_replace` serialises writers on a stable sidecar beside the target
+  // (`.dsh-ops-update-<sha256 of the name>.lock`, never the target itself), so that artifact has to
+  // stay out of every selection the file tools make: a directory-wide `replace` must not rewrite it
+  // and a `glob` must not report it as a result. The walker's hidden-component rule is what keeps it
+  // out, and that rule is platform-independent, so this is asserted on every host rather than only
+  // where the sidecar is actually created.
+  await withTempDir('lock-artifact', async workspace => {
+    const sidecar = '.dsh-ops-update-1f0a6b5cd0d2b3a495e2c41a5f1b7ee2d9a4c8f6b0e3a1d7c5f2b8e6a3d9c4f1.lock'
+    fs.writeFileSync(path.join(workspace, 'notes.txt'), 'one TOKEN two\n')
+    fs.writeFileSync(path.join(workspace, sidecar), '')
+
+    const globbed = envelopeOf(await callTool('glob', { path: workspace, pattern: ['**/*'] }, { root: workspace }), assert)
+    assert.equal(globbed.items.some(item => String(item).includes('dsh-ops-update-')), false, JSON.stringify(globbed.items))
+
+    const grepped = envelopeOf(await callTool('grep', { path: workspace, pattern: 'TOKEN' }, { root: workspace }), assert)
+    assert.equal(grepped.items.some(item => String(item.path).includes('dsh-ops-update-')), false, JSON.stringify(grepped.items))
+
+    const replaced = envelopeOf(await callTool('replace', { path: workspace, pattern: 'TOKEN', replacement: 'DONE' }, { root: workspace }), assert)
+    assert.equal(replaced.changed, 1)
+    assert.deepEqual(replaced.items.map(item => path.basename(item.path)), ['notes.txt'])
+    assert.equal(fs.readFileSync(path.join(workspace, sidecar), 'utf8'), '', 'the lock sidecar must not be edited')
+  })
+})
+
+await test('glob details report a real mtime, and sort:modified orders by it rather than by size', async () => {
+  // #236: `modified` used to be the byte count, so `details.modified` duplicated
+  // `details.bytes` and `sort: "modified"` ordered by file size. The fixtures
+  // invert size, time and path order on purpose: the older file is the bigger
+  // one, and the newest file sorts last by name, so a size-based key and a
+  // path-based key are both visibly different from the time-based one.
+  await withTempDir('glob-modified', async workspace => {
+    const epoch = Date.UTC(2024, 0, 1)
+    const older = path.join(workspace, 'a-older-big.txt')
+    const newer = path.join(workspace, 'z-newer-small.txt')
+    fs.writeFileSync(older, 'o'.repeat(8192))
+    fs.writeFileSync(newer, 'n')
+    fs.utimesSync(older, new Date(epoch - 120_000), new Date(epoch - 120_000))
+    fs.utimesSync(newer, new Date(epoch), new Date(epoch))
+
+    const detailsFor = async sort => envelopeOf(await callTool('glob', { path: workspace, pattern: ['*.txt'], outputMode: 'details', ...(sort === undefined ? {} : { sort }) }, { root: workspace }), assert)
+    const names = envelope => envelope.items.map(item => path.basename(item.path))
+
+    assert.deepEqual(names(await detailsFor('path')), ['a-older-big.txt', 'z-newer-small.txt'], 'sort:path stays the walk order')
+    const byModified = await detailsFor('modified')
+    assert.deepEqual(names(byModified), ['z-newer-small.txt', 'a-older-big.txt'], 'sort:modified is newest first')
+    assert.deepEqual(Object.fromEntries(byModified.items.map(item => [path.basename(item.path), item.bytes])), { 'z-newer-small.txt': 1, 'a-older-big.txt': 8192 }, 'bytes still reports the on-disk size')
+
+    for (const item of byModified.items) {
+      const name = path.basename(item.path)
+      const stamped = fs.statSync(item.path).mtimeMs
+      assert.equal(typeof item.modified, 'number', `modified must be a number: ${JSON.stringify(item)}`)
+      assert.ok(item.modified > 1_000_000_000_000, `${name}: modified must be epoch milliseconds, got ${item.modified}`)
+      assert.ok(Math.abs(item.modified - stamped) < 1, `${name}: modified ${item.modified} must be the path mtime ${stamped}`)
+      // The unit and the instant are the ones ops_stat reports, so the two tools
+      // can be compared directly instead of being assumed to agree.
+      const stat = envelopeOf(await callTool('stat', { path: item.path }, { root: workspace }), assert)
+      assert.equal(item.modified, stat.modifiedMs, `${name}: ops_glob.modified must equal ops_stat.modifiedMs`)
+    }
+
+    // A symlink to a file is not a candidate at all — the walker refuses links
+    // before a glob can match one — so "the link or its target" cannot arise for a
+    // details item. POSIX only: creating a symlink on Windows needs a privilege
+    // the runner may not hold, and the rule being asserted is platform-independent.
+    if (process.platform !== 'win32') {
+      fs.symlinkSync(newer, path.join(workspace, 'link-to-newer.txt'))
+      assert.deepEqual(names(await detailsFor('modified')), ['z-newer-small.txt', 'a-older-big.txt'], 'a symlink to a file is never a candidate')
+    }
+
+    // Two writes inside one second (or a coarse clock) must not reshuffle: the
+    // sort is stable, so the walk's path order decides the tie.
+    const tieFirst = path.join(workspace, 'tie-a.txt')
+    const tieSecond = path.join(workspace, 'tie-b.txt')
+    fs.writeFileSync(tieFirst, 'aa')
+    fs.writeFileSync(tieSecond, 'b')
+    fs.utimesSync(tieFirst, new Date(epoch), new Date(epoch))
+    fs.utimesSync(tieSecond, new Date(epoch), new Date(epoch))
+    const ties = envelopeOf(await callTool('glob', { path: workspace, pattern: ['tie-*.txt'], outputMode: 'details', sort: 'modified' }, { root: workspace }), assert)
+    assert.deepEqual(names(ties), ['tie-a.txt', 'tie-b.txt'], 'equal timestamps keep the walk order')
+  })
+})
+
+await test('pre-lock refusals leave no sidecar and published locks remain invisible', async () => {
+  // #244 checks pure snapshots before acquiring a single-file update lock.
+  // Published writes and replace scans still retain the persistent lock inode;
+  // selection tools must never expose or rewrite that cooperative sidecar.
+  await withTempDir('update-lock-refusal', async workspace => {
+    const target = path.join(workspace, 'notes.txt')
+    fs.writeFileSync(target, 'one TOKEN two\n')
+    const before = fs.readFileSync(target)
+    const beforeStat = fs.statSync(target)
+    // The sidecar is named from the lowercased target name, exactly as the worker does.
+    const sidecarOf = name => `.dsh-ops-update-${createHash('sha256').update(name).digest('hex')}.lock`
+    const snapshot = () => fs.readdirSync(workspace).sort()
+    const declared = (...names) => names.sort()
+
+    assert.deepEqual(snapshot(), declared('notes.txt'), 'the fixture starts with one file')
+
+    // A stale revision is refused before write_single takes the lock.
+    const stale = '0'.repeat(64)
+    const first = envelopeOf(await callTool('write_file', { path: target, content: 'three TOKEN four\n', expectedRevision: stale }, { root: workspace }), assert)
+    assert.equal(first.status, 'error')
+    assert.equal(first.error.code, 'REVISION_CONFLICT')
+    assert.deepEqual(snapshot(), declared('notes.txt'), 'a stale revision must not create a sidecar')
+    assert.deepEqual(fs.readFileSync(target), before, 'a refused write must not touch the target')
+    assert.equal(fs.statSync(target).mtimeMs, beforeStat.mtimeMs, 'a refused write must not restamp the target')
+
+    // Repeating a pre-lock refusal still creates nothing.
+    const second = envelopeOf(await callTool('write_file', { path: target, content: 'three TOKEN four\n', expectedRevision: stale }, { root: workspace }), assert)
+    assert.equal(second.error.code, 'REVISION_CONFLICT')
+    assert.deepEqual(snapshot(), declared('notes.txt'), 'repeated refusals leave no sidecar')
+
+    // A read-only refusal is decided before the lock, so it adds nothing at all.
+    const frozen = envelopeOf(await callTool('write_file', { path: target, content: 'x', expectedRevision: stale }, { root: workspace, readOnly: true }), assert)
+    assert.equal(frozen.error.code, 'POLICY_DENIED')
+    assert.deepEqual(snapshot(), declared('notes.txt'), 'a fence decided before the lock leaves no new entry')
+
+    // A successful no-op write acquires the persistent lock without restamping the target.
+    const noOp = envelopeOf(await callTool('write_file', { path: target, content: before.toString(), expectedRevision: createHash('sha256').update(before).digest('hex') }, { root: workspace }), assert)
+    assert.equal(noOp.status, 'completed', JSON.stringify(noOp))
+    assert.deepEqual(snapshot(), declared('notes.txt', sidecarOf('notes.txt')))
+    assert.equal(fs.statSync(path.join(workspace, sidecarOf('notes.txt'))).size, 0, 'the sidecar carries no payload')
+
+    // Invisible to every selection tool, including a directory-wide replace.
+    const globbed = envelopeOf(await callTool('glob', { path: workspace, pattern: ['**/*'] }, { root: workspace }), assert)
+    assert.deepEqual(globbed.items.map(item => path.basename(String(item))), ['notes.txt'], 'glob must not report the sidecar')
+    const grepped = envelopeOf(await callTool('grep', { path: workspace, pattern: 'TOKEN' }, { root: workspace }), assert)
+    assert.deepEqual([...new Set(grepped.items.map(item => path.basename(item.path)))], ['notes.txt'], 'grep must not search the sidecar')
+    const replaced = envelopeOf(await callTool('replace', { path: workspace, pattern: 'TOKEN', replacement: 'DONE' }, { root: workspace }), assert)
+    assert.equal(replaced.changed, 1)
+    assert.deepEqual(replaced.items.map(item => path.basename(item.path)), ['notes.txt'], 'replace must not rewrite the sidecar')
+    assert.equal(fs.readFileSync(target, 'utf8'), 'one DONE two\n')
+    assert.equal(fs.statSync(path.join(workspace, sidecarOf('notes.txt'))).size, 0, 'a directory-wide replace leaves the sidecar empty')
+    assert.deepEqual(snapshot(), declared('notes.txt', sidecarOf('notes.txt')), 'a successful replace reuses the same sidecar')
+
+    // A directory-wide replace walks and locks every candidate *before* it counts
+    // a match or consults the write-roots fence, so its refusal leaves one declared
+    // sidecar per walked file — including a bystander that held no match.
+    const fenced = path.join(workspace, 'fenced.txt')
+    const bystander = path.join(workspace, 'bystander.txt')
+    fs.writeFileSync(fenced, 'TOKEN\n')
+    fs.writeFileSync(bystander, 'nothing here\n')
+    const refusedReplace = envelopeOf(await callTool('replace', { path: workspace, pattern: 'TOKEN', replacement: 'DONE' }, { root: workspace, writeRoots: [] }), assert)
+    assert.equal(refusedReplace.error?.code, 'POLICY_DENIED')
+    assert.equal(fs.readFileSync(fenced, 'utf8'), 'TOKEN\n', 'a fenced replace must change nothing')
+    assert.equal(fs.readFileSync(bystander, 'utf8'), 'nothing here\n', 'a file with no match is untouched too')
+    assert.deepEqual(snapshot(), declared('notes.txt', 'fenced.txt', 'bystander.txt', sidecarOf('notes.txt'), sidecarOf('fenced.txt'), sidecarOf('bystander.txt')), 'one declared sidecar per walked file, no temporary debris')
+    assert.equal(envelopeOf(await callTool('glob', { path: workspace, pattern: ['**/*'] }, { root: workspace }), assert).items.every(item => !String(item).includes('dsh-ops-update-')), true, 'the new sidecars are invisible too')
   })
 })
 

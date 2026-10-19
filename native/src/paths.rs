@@ -49,7 +49,7 @@ pub fn relative(raw: &str) -> Result<String> {
             }
             _ => {
                 return Err(Failure::new(
-                    "POLICY_DENIED",
+                    "PATH_RESTRICTED",
                     "Absolute paths, dot components and traversal are forbidden",
                 ));
             }
@@ -57,7 +57,7 @@ pub fn relative(raw: &str) -> Result<String> {
     }
     if parts.is_empty() || parts.iter().any(|p| p.eq_ignore_ascii_case(STORE)) {
         return Err(Failure::new(
-            "POLICY_DENIED",
+            "PATH_RESTRICTED",
             "Root and audit storage are reserved",
         ));
     }
@@ -84,7 +84,7 @@ pub fn parent(root: &Dir, path: &str) -> Result<(Dir, String)> {
 fn reject_reparse(m: &Metadata) -> Result<()> {
     if m.file_type().is_symlink() {
         return Err(Failure::new(
-            "POLICY_DENIED",
+            "PATH_RESTRICTED",
             "Linked ancestors are not traversed",
         ));
     }
@@ -93,7 +93,7 @@ fn reject_reparse(m: &Metadata) -> Result<()> {
         use cap_std::fs::MetadataExt;
         if m.file_attributes() & 0x400 != 0 {
             return Err(Failure::new(
-                "POLICY_DENIED",
+                "PATH_RESTRICTED",
                 "Reparse points are not traversed",
             ));
         }
@@ -151,7 +151,7 @@ pub fn authorize_tree(root: &Dir, path: &str, request: &crate::contract::Request
         if metadata.is_dir() {
             let child = dir.open_dir_nofollow(name)?;
             for entry in child.entries()? {
-                let name = entry?.file_name().into_string().map_err(|_| Failure::new("POLICY_DENIED", "Non-UTF8 credential preflight entry"))?;
+                let name = entry?.file_name().into_string().map_err(|_| Failure::new("PATH_RESTRICTED", "Non-UTF8 credential preflight entry"))?;
                 check(&child, &name, &display.join(&name), request, depth + 1, visited)?;
             }
         }
@@ -183,7 +183,7 @@ fn scan_node(dir: &Dir, name: &str, kind: Kind, s: &mut Scan, depth: usize) -> R
     if is_link(&m) {
         if kind != Kind::Remove {
             return Err(Failure::new(
-                "POLICY_DENIED",
+                "PATH_RESTRICTED",
                 "Copy/move of links or trees containing links is unsupported; remove only unlinks them",
             ));
         }
@@ -207,7 +207,7 @@ fn scan_node(dir: &Dir, name: &str, kind: Kind, s: &mut Scan, depth: usize) -> R
         reject_reparse(&m)?;
         if dir.canonicalize(name)? != Path::new(name) {
             return Err(Failure::new(
-                "POLICY_DENIED",
+                "PATH_RESTRICTED",
                 "Directory alias is unsupported",
             ));
         }
@@ -215,7 +215,7 @@ fn scan_node(dir: &Dir, name: &str, kind: Kind, s: &mut Scan, depth: usize) -> R
         // Linked Git worktrees carry an external gitdir; do not damage that relationship.
         if child.symlink_metadata(".git").is_ok_and(|m| !m.is_dir()) {
             return Err(Failure::new(
-                "POLICY_DENIED",
+                "PATH_RESTRICTED",
                 "Linked Git worktree requires its Git manager, not recursive filesystem operations",
             ));
         }
@@ -225,7 +225,7 @@ fn scan_node(dir: &Dir, name: &str, kind: Kind, s: &mut Scan, depth: usize) -> R
             let name = entry?
                 .file_name()
                 .into_string()
-                .map_err(|_| Failure::new("POLICY_DENIED", "Non-UTF8 directory entry"))?;
+                .map_err(|_| Failure::new("PATH_RESTRICTED", "Non-UTF8 directory entry"))?;
             if names.len() >= MAX_ENTRIES as usize {
                 return Err(Failure::new(
                     "OUTPUT_LIMIT",
@@ -234,7 +234,7 @@ fn scan_node(dir: &Dir, name: &str, kind: Kind, s: &mut Scan, depth: usize) -> R
             }
             if name.eq_ignore_ascii_case(STORE) {
                 return Err(Failure::new(
-                    "POLICY_DENIED",
+                    "PATH_RESTRICTED",
                     "Nested audit store is protected",
                 ));
             }
@@ -249,7 +249,7 @@ fn scan_node(dir: &Dir, name: &str, kind: Kind, s: &mut Scan, depth: usize) -> R
         s.hash.update(b"enddir\0");
     } else {
         return Err(Failure::new(
-            "POLICY_DENIED",
+            "PATH_RESTRICTED",
             "Special filesystem objects are unsupported",
         ));
     }
@@ -295,11 +295,11 @@ fn copy_node(
             let name = entry?
                 .file_name()
                 .into_string()
-                .map_err(|_| Failure::new("POLICY_DENIED", "Non-UTF8 entry"))?;
+                .map_err(|_| Failure::new("PATH_RESTRICTED", "Non-UTF8 entry"))?;
             copy_node(&source, &name, &target, &name, depth + 1, visited)?;
         }
     } else {
-        return Err(Failure::new("POLICY_DENIED", "Unsupported copy source"));
+        return Err(Failure::new("PATH_RESTRICTED", "Unsupported copy source"));
     }
     Ok(())
 }
@@ -330,7 +330,7 @@ fn remove_node(dir: &Dir, name: &str, depth: usize, visited: &mut u64) -> Result
             let n = entry?
                 .file_name()
                 .into_string()
-                .map_err(|_| Failure::new("POLICY_DENIED", "Non-UTF8 entry"))?;
+                .map_err(|_| Failure::new("PATH_RESTRICTED", "Non-UTF8 entry"))?;
             remove_node(&child, &n, depth + 1, visited)?;
         }
         drop(child);
@@ -348,7 +348,7 @@ fn remove_node(dir: &Dir, name: &str, depth: usize, visited: &mut u64) -> Result
                 let f = dir.open_with(name, &read_options())?;
                 if f.metadata()?.nlink() != 1 {
                     return Err(Failure::new(
-                        "POLICY_DENIED",
+                        "PATH_RESTRICTED",
                         "Readonly hardlinked file cannot be safely changed",
                     ));
                 }
@@ -360,7 +360,7 @@ fn remove_node(dir: &Dir, name: &str, depth: usize, visited: &mut u64) -> Result
             Err(e) => return Err(e.into()),
         }
     } else {
-        return Err(Failure::new("POLICY_DENIED", "Special object"));
+        return Err(Failure::new("PATH_RESTRICTED", "Special object"));
     }
     Ok(())
 }

@@ -1,6 +1,8 @@
 # dsh-ops 手动验收清单
 
-0.2.5 已恢复 `npm run verify` 自动门禁：安装 devDependencies 后运行 `DSH_OPS_REQUIRE_RUNTIME=1 npm run verify`（PowerShell 用 `$env:DSH_OPS_REQUIRE_RUNTIME='1'; npm run verify`）。以下清单是另行人工验收，不等于这些操作都已执行。0.2.4 时“不补/改测试、不运行旧套件”的要求与记录仅属历史，现已被此次修复替代。替换已加载源码后按宿主要求重载/重启。
+> **历史记录（0.2.x，FastCtx 时期）。** 本清单描述的是基于 FastCtx 的 0.2.x 版本。FastCtx 后台组件（`dsh-ops/background`、`ops_run`/`ops_run_background`/`ops_job_*`）、FastCtx 进程生命周期以及 `scripts/measure-schemas.mjs` 均已移除，「任务与输出隔离」「进程生命周期」「数字复核」以及涉及后台组件、`enableShellTools`、FastCtx 的条目不再适用；文件工具自 0.3.0 起由独立 Rust worker 提供。当前行为以 [组件参考](组件参考.md)、[配置参考](配置参考.md) 与 `npm run verify` 为准。
+
+0.2.5 曾把 `npm run verify` 接成自动门禁。它当前是否由 CI 自动执行，以 `.github/workflows/` 下各工作流的 `on:` 触发器为准（2026-10-17 现取：`ci.yml` 在推送到 `main` 与 pull request 上运行；`release.yml` 的 `on:` 含 `v*` tag，但该工作流当前被单独停用——这一点在 `on:` 里看不出来，见仓库的 Actions 设置，或 `gh api repos/T-Auto/dsh-ops/actions/workflows` 的 `state` 字段）；本清单只描述本机怎么跑：安装 devDependencies 后运行 `DSH_OPS_REQUIRE_RUNTIME=1 npm run verify`（PowerShell 用 `$env:DSH_OPS_REQUIRE_RUNTIME='1'; npm run verify`）。以下清单是另行人工验收，不等于这些操作都已执行。0.2.4 时“不补/改测试、不运行旧套件”的要求与记录仅属历史，现已被此次修复替代。替换已加载源码后按宿主要求重载/重启。
 
 ## 系统 shell 回退与载荷
 
@@ -27,7 +29,9 @@
 - `promptPolicy: false`：不发布路由提示词。
 - `deny-host-shell`：有无 ops 命令组都应拒绝配置的宿主 shell；若工具来自继承层，目录也应遮蔽。无可用执行器时不推荐不可调用的 ops 命令。
 
-## 文件工具
+## 文件工具（以下仅为 0.2.x 历史验收，不是当前能力）
+
+当前 `ops_inspect_local_file` 仅支持单路径、有界 UTF-8 文本或 hex；没有 `files[]`、多区间、任意编码或 PDF 文本接口。当前回归入口为 `test/inspect-hex.test.mjs` 与 `test/file-contract.test.mjs`，不要对 0.3.x 执行下列旧版用例。
 
 - 多文件多区间 `files[]`，各自 offset/limit/encoding；重复路径读取不同区间，结果有序。
 - GBK 文本显式 encoding；单文件 grep encoding、目录 fallback_encoding。

@@ -44,7 +44,7 @@ pub fn run(root: &Dir, store: &Store, request: &Request) -> Result<Value> {
                 match dir.symlink_metadata(&leaf) {
                     Ok(metadata) if paths::is_link(&metadata) => {
                         return Err(Failure::new(
-                            "POLICY_DENIED",
+                            "PATH_RESTRICTED",
                             "Protect the real path, not a symlink/junction alias",
                         ));
                     }
@@ -69,7 +69,7 @@ pub fn run(root: &Dir, store: &Store, request: &Request) -> Result<Value> {
                         || touched.iter().any(|p: &String| paths::overlaps(path, p))
                     {
                         return Err(Failure::new(
-                            "POLICY_DENIED",
+                            "PATH_RESTRICTED",
                             "Protected, overlapping, cyclic or dependent batch paths",
                         ));
                     }
@@ -201,7 +201,7 @@ fn validate_saved(job: &Job) -> Result<()> {
                 || paths_seen.iter().any(|q| paths::overlaps(&p, q))
             {
                 return Err(Failure::new(
-                    "POLICY_DENIED",
+                    "PATH_RESTRICTED",
                     "Invalid persisted protection or overlap",
                 ));
             }
@@ -254,7 +254,7 @@ fn execute(root: &Dir, store: &Store, job: &mut Job, request: &Request) -> Resul
                     .iter()
                     .any(|protected| paths::overlaps(p, protected))
                 {
-                    return Err(Failure::new("POLICY_DENIED", "Protected path"));
+                    return Err(Failure::new("PATH_RESTRICTED", "Protected path"));
                 }
             }
             paths::authorize_tree(root, &op.path, request)?;

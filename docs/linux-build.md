@@ -1,9 +1,9 @@
 # Building and running dsh-ops on Linux x64
 
-Linux x64 is a supported target for the **file**, **ptc** and **background**
-components. The **shell** component (`ops_bash`, bundled PowerShell 7, the bash
-IPC proxies) remains Windows x64 only — on Linux there is no bundled bash to
-publish, so the plugin never pretends otherwise.
+Linux x64 is a supported target for the **file**, **ptc** and **shell**
+components. On Linux the shell component's `ops_bash` runs the distribution's own
+bash (see [Configuring the shell lane](#configuring-the-shell-lane)); the bundled
+PowerShell 7 and the bash IPC proxies remain Windows x64 only.
 
 Nothing on Linux is downloaded with the package: the native workers are staged
 locally from source, which is why this page exists. The npm package still
@@ -14,15 +14,14 @@ packages to fetch.
 | --- | --- | --- |
 | `dsh-ops/file` | yes | 4 tools: `ops_inspect_local_file`, `ops_grep`, `ops_glob`, `ops_replace` |
 | `dsh-ops/ptc` | yes | `ops_batch`, `ops_result`; opt-in |
-| `dsh-ops/background` | yes, with a bash | job tools are gated on a resolvable bash — see below |
-| `dsh-ops/shell` | no | `ops_bash` and pwsh stay Windows x64 |
+| `dsh-ops/shell` | yes | `ops_bash` over the host bash; pwsh stays Windows x64 |
 
 ## Prerequisites
 
 | Requirement | Version | Why |
 | --- | --- | --- |
 | Node.js | `^22.19 \|\| >=24` | `package.json` `engines` |
-| Rust | `1.88` or newer (`cargo`) | `native/Cargo.toml` and `vendor/fastctx/Cargo.toml` `rust-version` |
+| Rust | `1.88` or newer (`cargo`) | `native/Cargo.toml` `rust-version` |
 | pnpm | any recent | `dsh plugin` forwards to it |
 | DSH | `0.2.0-rc.2` | the host this release targets |
 
@@ -44,7 +43,7 @@ The root package declares `"os": ["win32", "linux"]`, so npm applies no platform
 veto here. On a tree whose `os` list is still Windows-only — the published 0.3.0
 tarball, for instance — the same command stops at `EBADPLATFORM`, and the
 published `npx dsh-ops@latest install` entry point is unusable on Linux for that
-reason. See [Installing into a profile](#6-install-into-a-profile) for the path
+reason. See [Installing into a profile](#5-install-into-a-profile) for the path
 that works regardless of how the tarball was published.
 
 If you do need to force a Windows-only tree to install on Linux, `npm install
@@ -79,62 +78,25 @@ half-copied or hand-edited `runtime/` fails closed instead of running.
 Verify it is wired up:
 
 ```console
-$ node bin/dsh-ops.mjs status
+$ node bin/dsh-ops.mjs ladder
 ```
 
-## 4. Build FastCtx (only for the background component)
+The first section of the report, `Native worker (file tools)`, names the staged
+worker and where it was resolved from.
 
-The file and PTC components use their own Rust worker and do **not** need
-FastCtx. Only `dsh-ops/background` does, so this step is optional.
-
-```console
-$ cargo build --release --locked --manifest-path vendor/fastctx/Cargo.toml
-    Finished `release` profile [optimized] target(s) in 2m 33s
-```
-
-The binary lands at `vendor/fastctx/target/release/fastctx`. Point the plugin at
-it either way:
-
-```console
-$ export DSH_OPS_FASTCTX_BIN="$PWD/vendor/fastctx/target/release/fastctx"
-```
-
-or per profile row:
-
-```yaml
-- id: dsh-ops-background
-  disabled: false
-  config:
-    binaryPath: /absolute/path/to/fastctx
-    enableShellTools: true
-```
-
-`resolveBinary()` searches the managed runtime, the vendored build, this
-package's own platform package, the published `@fastctx/<platform>-<arch>`
-package, and `PATH`, in that order — and reports every rung it tried when it
-finds nothing, so a missing runtime is never a silent mystery.
-
-## 5. Verify on this machine
+## 4. Verify on this machine
 
 The gate has three outcomes — passed, failed, skipped — and a skip is never
-counted as a pass. `DSH_OPS_REQUIRE_RUNTIME=1` turns a skip into a failure, so
-this is the strictest form:
+counted as a pass. `DSH_OPS_REQUIRE_RUNTIME=1` turns a skip into a failure (for
+example a native-worker suite run before `npm run build:ptc`), so this is the
+strictest form:
 
 ```console
-$ DSH_OPS_FASTCTX_BIN="$PWD/vendor/fastctx/target/release/fastctx" \
-  DSH_OPS_REQUIRE_RUNTIME=1 npm run verify
-…
-dsh-ops test: 30 suite(s) passed in 15s
+$ DSH_OPS_REQUIRE_RUNTIME=1 npm run verify
 ```
 
-Without a FastCtx build the same command reports fewer suites and lists the
-skipped ones explicitly:
-
-```console
-dsh-ops lifecycle: skipped (no FastCtx executable found; …)
-dsh-ops mount: skipped (no FastCtx executable found; …)
-dsh-ops test: 28 suite(s) passed, 2 skipped in 11s
-```
+Suites whose subject is another platform (Windows ACLs, for instance) skip
+themselves and say so in the summary line.
 
 The Rust worker's own barrier test:
 
@@ -201,7 +163,7 @@ platform, because that is the question the release packager asks before it
 publishes. Set `DSH_OPS_REQUIRE_ALL_TARGETS=1` when you are assembling a
 cross-platform release and a missing platform must be a failure.
 
-## 6. Install into a profile
+## 5. Install into a profile
 
 `npx dsh-ops@latest install` is the documented Windows path and requires a
 Windows-only npm tarball. On Linux, install from the checkout through DSH's own
@@ -233,32 +195,17 @@ distribution's own bash (`config.bashPath` → `PATH` → `/bin/bash`,
 mode must be confined by a host sandbox — if none can confine the call it is
 refused, never run unrestricted.
 
-The **`background`** component's job tools (`ops_run_background`,
-`ops_job_output`, `ops_job_list`, `ops_job_kill`) are the ones that need naming a
-bash explicitly. That lane is Windows-only in 0.3.1 — its payload and IPC proxies
-are — so on Linux it deliberately ignores the host-bash rung the `shell`
-component uses, and only an explicit path reaches it. Without one the tools stay
-unpublished, which is fail-closed, not a bug: `FastCtxTools.shellAllowed()`
-refuses a command surface when no executor is resolvable.
-
-To get those tools:
+To use a different bash, name it explicitly on the shell row:
 
 ```yaml
-- id: dsh-ops-background
+- id: dsh-ops-shell
   config:
     bashPath: /usr/bin/bash
 ```
 
-> **`allowSystemShellFallback: true` will not do it.** The startup config
-> migration rewrites that key back to `false` on purpose — it is a security
-> posture downgrade (an unpinned system shell) and the migration will not let a
-> deployment drift into it silently. `bashPath` is the sanctioned, explicit
-> alternative, and a configured path is authoritative: it wins over PATH and the
-> bundled layouts.
->
-> This holds in restricted modes too: `workspace-write` and `read-only`
-> confinement rejects an MSYS-style bash whose digest is not pinned, so point
-> `bashPath` at a plain system bash and let the DSH sandbox confine it.
+> `allowSystemShellFallback` has no effect on Linux: the host bash is already
+> the rung. A configured `bashPath` is authoritative: it wins over PATH and the
+> well-known locations.
 
 ## Troubleshooting
 
@@ -270,7 +217,6 @@ To get those tools:
 | file tools silently missing, no error | `resolveWorker()` threw and the component degraded: `required` defaults to `false` | set `required: true` on the `dsh-ops/file` row to make it loud |
 | `Bad file descriptor (os error 9)` in `preflight` | the audit store or atomic replace synced a directory handle that cap-std opened `O_PATH` on Linux, where `fsync` is refused | fixed in `native/src/lib.rs`; rebuild with `npm run build:ptc` |
 | a denied command reports a generic failure instead of `POLICY_DENIED` | the host's English denial signatures were matched against a localized libc message | the bash lane pins `LC_MESSAGES=C`; a non-English host on an older build shows this |
-| job tools never appear | no resolvable bash | set `bashPath`, see above |
 
 ## Why a local build
 

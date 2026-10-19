@@ -1,10 +1,12 @@
 /** Current component routing: advertise only tools actually visible to the model. */
-import { BASH_TOOL, FILE_TOOLS, BACKGROUND_TOOLS, TOOLING_SECTION, HOST_SHELL_SECTION,
+import * as policy from '../lib/policy.js'
+import { BASH_TOOL, FILE_TOOLS, TOOLING_SECTION, HOST_SHELL_SECTION,
   TOOL_PREFIX, publicToolName, renderToolingPolicy, renderHostShellPolicy,
   ladderLevels, hostShellRefusal, hostShellEnforcement } from '../lib/policy.js'
 import { assert, report, test } from './lib/harness.mjs'
 const files = FILE_TOOLS.map(publicToolName)
-const background = BACKGROUND_TOOLS.map(publicToolName)
+// The tools the removed FastCtx background component used to publish.
+const removed = ['ops_run', 'ops_run_background', 'ops_job_output', 'ops_job_list', 'ops_job_kill']
 await test('an empty registry produces no tooling guidance', () => {
   assert.equal(renderToolingPolicy({ published: [] }), '')
 })
@@ -12,7 +14,7 @@ await test('file guidance names exactly the available file tools', () => {
   const text = renderToolingPolicy({ published: files, shellComponent: false })
   assert.match(text, /^# Repository file tools/)
   for (const name of files) assert.ok(text.includes(name))
-  for (const name of [BASH_TOOL, ...background, 'ops_run', 'PowerShell 7']) assert.equal(text.includes(name), false)
+  for (const name of [BASH_TOOL, ...removed, 'PowerShell 7']) assert.equal(text.includes(name), false)
   assert.match(text, /Every file tool has one `path`/)
   assert.equal(text.includes('Legacy ops_* file paths are absolute'), false)
   assert.equal(text.includes('FastCtx’s own session cwd'), false)
@@ -48,17 +50,17 @@ await test('shell routing prefers bash and names bundled pwsh only when availabl
   assert.equal(renderToolingPolicy({ published: ['pwsh'] }).includes('bundled PowerShell'), false)
   assert.equal(renderToolingPolicy({ published: ['pwsh'], shellComponent: false }), '')
 })
-await test('background guidance includes only published owned jobs', () => {
-  const text = renderToolingPolicy({ published: background, shellComponent: false })
-  for (const name of background) assert.ok(text.includes(name))
-  assert.match(text, /Only operate on job IDs you started in this session/)
-  assert.equal(text.includes('ops_run |'), false)
-  assert.equal(text.includes(BASH_TOOL), false)
+await test('the removed background tools are never advertised, even if a registry still lists them', () => {
+  assert.equal(renderToolingPolicy({ published: removed, shellComponent: false }), '')
+  const mixed = renderToolingPolicy({ published: [...files, BASH_TOOL, ...removed] })
+  for (const name of removed) assert.equal(mixed.includes(name), false, `${name} is not advertised`)
+  assert.equal(mixed.includes('job IDs'), false)
+  for (const name of ['BACKGROUND_TOOLS', 'SHELL_TOOLS']) assert.equal(name in policy, false, `${name} is no longer exported`)
 })
 await test('levels are registry facts, never just resolved executables', () => {
-  assert.deepEqual(ladderLevels({ published: [], pwsh: true }), { fastctx: false, run: false, bash: false, pwsh: false })
+  assert.deepEqual(ladderLevels({ published: [], pwsh: true }), { files: false, bash: false, pwsh: false })
   assert.deepEqual(ladderLevels({ published: [files[0], BASH_TOOL, 'pwsh'], pwsh: true }),
-    { fastctx: true, run: false, bash: true, pwsh: true })
+    { files: true, bash: true, pwsh: true })
 })
 await test('deployment guidance is appended and transport vocabulary stays hidden', () => {
   const text = renderToolingPolicy({ published: files, extraGuidance: 'Never edit vendor/.' })

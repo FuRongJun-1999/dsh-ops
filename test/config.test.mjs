@@ -6,15 +6,13 @@
  * where a number belongs must see its own key in the failure.
  */
 
-import { ConfigError, DEFAULT_DENIED_HOST_TOOLS, DEFAULT_SERVER_NAME, DEFAULT_TOOL_CALL_TIMEOUT_MS, resolveConfig } from '../lib/config.js'
+import { ConfigError, DEFAULT_DENIED_HOST_TOOLS, LEGACY_FASTCTX_KEYS, resolveConfig } from '../lib/config.js'
 import { assert, report, test } from './lib/harness.mjs'
 
 await test('an absent config resolves to the documented defaults', () => {
   for (const raw of [undefined, null, {}]) {
     const config = resolveConfig(raw)
-    assert.equal(config.serverName, DEFAULT_SERVER_NAME)
-    assert.equal(config.enableShellTools, true)
-    assert.equal(config.toolCallTimeoutMs, DEFAULT_TOOL_CALL_TIMEOUT_MS)
+    for (const key of LEGACY_FASTCTX_KEYS) assert.equal(Object.hasOwn(config, key), false, `${key} is no longer resolved`)
     assert.equal(config.required, false)
     assert.equal(config.shellPolicy, 'advise')
     assert.deepEqual(config.deniedHostTools, DEFAULT_DENIED_HOST_TOOLS)
@@ -32,10 +30,7 @@ await test('an absent config resolves to the documented defaults', () => {
 
 await test('an explicit config overrides every default', () => {
   const config = resolveConfig({
-    binaryPath: 'C:\\tools\\fastctx.exe',
-    serverName: 'ops-tools',
-    enableShellTools: false,
-    toolCallTimeoutMs: 1_000,
+    binaryPath: 'C:\\tools\\dsh-ops-worker.exe',
     required: true,
     shellPolicy: 'deny-host-shell',
     deniedHostTools: ['pwsh'],
@@ -45,10 +40,7 @@ await test('an explicit config overrides every default', () => {
     publishBashTool: false,
     allowSystemShellFallback: true,
   })
-  assert.equal(config.binaryPath, 'C:\\tools\\fastctx.exe')
-  assert.equal(config.serverName, 'ops-tools')
-  assert.equal(config.enableShellTools, false)
-  assert.equal(config.toolCallTimeoutMs, 1_000)
+  assert.equal(config.binaryPath, 'C:\\tools\\dsh-ops-worker.exe')
   assert.equal(config.required, true)
   assert.equal(config.shellPolicy, 'deny-host-shell')
   assert.deepEqual(config.deniedHostTools, ['pwsh'])

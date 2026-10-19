@@ -55,6 +55,8 @@ pub struct Job {
 #[serde(rename_all = "camelCase")]
 pub struct Failure {
     pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Box<str>>,
     pub phase: Box<str>,
     pub retryable: bool,
     pub effect_state: Box<str>,
@@ -65,12 +67,26 @@ impl Failure {
     pub fn new(code: &str, message: impl ToString) -> Self {
         Self {
             code: code.into(),
+            reason: None,
             phase: "preflight".into(),
             retryable: false,
             effect_state: "none".into(),
-            next_action: "Correct the request or inspect the manifest.".into(),
+            next_action: match code {
+                "METADATA_UNSUPPORTED" => "Use a filesystem/platform or dedicated tool that preserves the source metadata. Changing the permission selector or blindly retrying cannot repair this limitation.",
+                "REFERENCE_EXPIRED" => "Release the expired result and acquire a new observation; references never grant authority.",
+                "REVISION_CONFLICT" => "Inspect the current revision before preparing a new request; do not blindly retry.",
+                "CREDENTIAL_DENIED" => "Choose a non-credential path; do not bypass the credential fence or change the permission selector to remove it.",
+                "PATH_RESTRICTED" => "Inspect the real path and linked/special components; do not bypass no-follow protection.",
+                _ => "Correct the request or inspect the manifest.",
+            }.into(),
             message: message.to_string(),
         }
+    }
+    /// Only actual authorization-mode/root denials may carry selector advice.
+    pub fn policy(reason: &str, message: impl ToString) -> Self {
+        let mut failure = Self::new("POLICY_DENIED", message);
+        failure.reason = Some(reason.into());
+        failure
     }
     pub fn unknown(message: impl ToString) -> Self {
         let mut e = Self::new("RESULT_UNKNOWN", message);
@@ -118,7 +134,7 @@ impl Request {
         NAMES.get_or_init(|| regex::Regex::new(r"(?i)(^|/)(id_(rsa|dsa|ecdsa|ed25519)(\.|$)|[^/]*credentials[^/]*\.(json|ya?ml|ini)$|service-account[^/]*\.json$|\.env(\.|$))").expect("fixed credential expression")).is_match(&target)
     }
     pub fn authorize_path(&self, path: &std::path::Path) -> Result<()> {
-        if self.denies_path(path) { return Err(Failure::new("POLICY_DENIED", "Credential location refused by the operator's file policy")); }
+        if self.denies_path(path) { return Err(Failure::new("CREDENTIAL_DENIED", "Credential location refused by the operator's file policy")); }
         Ok(())
     }
     /// The denied roots as paths, in the lexical form the traversal compares
@@ -175,4 +191,27 @@ pub struct ResultArgs {
     pub max_bytes: Option<usize>,
     pub fields: Option<Vec<String>>,
     pub equals: Option<std::collections::BTreeMap<String, Value>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selector_reasons_are_optional_and_backward_compatible() {
+        let legacy = serde_json::to_value(Failure::new("POLICY_DENIED", "Scope mismatch")).unwrap();
+        assert!(legacy.get("reason").is_none());
+        let restored: Failure = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.reason, None);
+        for reason in ["read-only", "write-roots"] {
+            let failure = serde_json::to_value(Failure::policy(reason, "Authorization refused")).unwrap();
+            assert_eq!(failure["code"], "POLICY_DENIED");
+            assert_eq!(failure["reason"], reason);
+            assert_eq!(failure["effectState"], "none");
+        }
+        for code in ["PATH_RESTRICTED", "CREDENTIAL_DENIED"] {
+            let failure = serde_json::to_value(Failure::new(code, "Restriction")).unwrap();
+            assert!(failure.get("reason").is_none());
+        }
+    }
 }

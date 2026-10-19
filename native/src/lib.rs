@@ -70,7 +70,7 @@ pub fn dispatch(request: Request) -> Result<Value> {
     // File reads/searches do not create or consult the durable audit store.
     // This is important for read-only sessions and keeps observation separate
     // from mutation audit records.
-    if matches!(request.tool.as_str(), "inspect_local_file" | "glob" | "grep" | "replace") {
+    if matches!(request.tool.as_str(), "inspect_local_file" | "glob" | "grep" | "replace" | "write_file" | "edit_file" | "diff" | "stat" | "copy" | "move" | "remove") {
         request.root_identity = String::new();
         return file::dispatch(&request);
     }
@@ -82,8 +82,8 @@ pub fn dispatch(request: Request) -> Result<Value> {
         && !(request.tool == "result"
             && request.args.get("action").and_then(Value::as_str) == Some("page"))
     {
-        return Err(Failure::new(
-            "POLICY_DENIED",
+        return Err(Failure::policy(
+            "read-only",
             "Read-only requests cannot mutate audit or result storage",
         ));
     }

@@ -1,8 +1,8 @@
 # Native PTC enhancement — 0.3.1 Windows x64, Linux x64, Apple Silicon
 
 Issues: [#3](https://github.com/T-Auto/dsh-ops/issues/3), [#8](https://github.com/T-Auto/dsh-ops/issues/8).
-The file and PTC components use an independent Rust worker. FastCtx remains only
-behind the explicitly enabled background component.
+The file and PTC components use an independent Rust worker. The FastCtx-backed
+background component has been removed.
 
 ## Runtime-bearing installation and original DSH permission linkage
 
@@ -50,10 +50,11 @@ Rust >=1.88 is required. Build uses `cargo build --release --locked` against
 `native/Cargo.toml`. No install scripts download binaries. On Windows, enable the
 session toolchain before building; do not add multi-version toolchains to global PATH.
 
-Enable the opt-in `dsh-ops/ptc` bundle row. Its only config keys are `required`
+The `dsh-ops/ptc` bundle row is enabled by default after #170; existing explicit
+profile disablement is preserved. Its only config keys are `required`
 (default false) and an optional absolute `binaryPath`. `DSH_OPS_WORKER_BIN` can
 select a build; otherwise the component uses `runtime/<platform>-<arch>/dsh-ops-worker[.exe]` before `native/target/release`.
-The component remains opt-in. Published 0.3.1 packages include the runtime bytes
+Published 0.3.1 packages include the runtime bytes
 of every supported platform; source checkouts stage them explicitly with
 `node bin/native-runtime.mjs stage --platform <target>`. There is no automatic
 compilation or download during installation.
@@ -85,42 +86,94 @@ turning skipped children into a whole-operation failure. Root access failures
 return `ACCESS_DENIED`; outside-workspace failures return `POLICY_DENIED` with
 the active workspace root in the message. Results are bounded and UTF-8-first.
 
+### Update-lock sidecars
+
+Every mutating file operation serialises cooperating writers on a persistent,
+hidden sidecar next to the target: `.dsh-ops-update-<sha256 of the lowercased
+basename>.lock`, created mode 0600 when the lock is first needed and reused by every
+later operation on that name. Single-file operations validate a snapshot before locking:
+stale revisions, edit conflicts and existing destinations are refused without a sidecar.
+`write_file` and `edit_file` dry runs never acquire this lock. A concurrent change or a
+publication failure after locking can still leave the artifact behind.
+
+Keeping it after a refusal is deliberate (#240 P5). Unlinking it on release
+would let a waiter that already opened the old inode hold a lock on an inode the
+path no longer names, while the next writer creates and locks a fresh file under
+the same name: two writers, one target. A zero-byte artifact that can be named,
+counted and tested is strictly better than that hole. `test/lock-sidecar.test.mjs`
+checks pre-lock refusals and dry runs; `test/linux-args.test.mjs` checks persistence
+and reuse. `ops_replace` is
+the broad case — it locks every file its `glob` selects before it counts a match,
+so a refused directory-wide replace leaves a sidecar beside each candidate,
+matching or not, and only a narrower `glob` bounds that.
+
+Nothing removes a sidecar automatically, and nothing should while a `dsh-ops`
+writer may be active: deleting one is what re-opens the race above. An operator
+may delete sidecars in a directory no writer is using; the next write recreates
+what it needs. The name starts with `.`, so the walker's hidden-component rule
+keeps it out of `ops_glob`, `ops_grep` and a directory-wide `ops_replace`, and
+`ops_batch` resolves its operations from the request rather than from a walk —
+the artifact is never a result, never a replacement target and never a batch item.
+
+### `ops_glob` details and ordering
+
+`outputMode: "details"` reports `bytes` (the on-disk size) and `modified`, a real
+modification time in **milliseconds since the Unix epoch** — the same quantity
+and unit `ops_stat` reports as `modifiedMs`, and `null` when the filesystem
+cannot report one. `sort: "modified"` orders newest first and is stable, so equal
+timestamps (a coarse clock, a preserved copy, two writes inside one second) keep
+the walk's path order; `sort: "path"` and an omitted `sort` keep that order. The
+timestamp is read without following links, and a link, junction or reparse entry
+is refused before it can become a candidate, so no `ops_glob` item is a link;
+`ops_stat` reports the opened file's time for a path reached through one.
+
 The native schemas deliberately do not expose `root`, `workspace`, `cwd`, or
 `file_path` aliases. `ops_bash` accepts the host-compatible optional
 `description` field but remains foreground-only; it does not accept
 `run_in_background` or create job IDs.
 
+Their important fields are (paths resolve relative to the DSH session cwd):
 
-The legacy `ops_glob`, `ops_grep`, `ops_inspect_local_file` and `ops_replace`
-interfaces are not the new Rust PTC core. Their relative-path base is FastCtx's
-own session cwd, which can be the Desktop profile directory rather than DSH's
-agent workspace. For deterministic comparisons, pass absolute paths. Do not pass
-`path: "."` as a workspace shorthand; the legacy server may reject it or resolve
-it against the wrong cwd.
+- `ops_glob`: required `pattern: string[]`, optional `path`, `sort`
+  (`path` | `modified`) and `outputMode: "details"` (on-disk `bytes`,
+  epoch-millisecond `modified`); at least one positive glob is required.
+- `ops_grep`: required regex `pattern`, optional `path` and array `glob` filter.
+  Use `summary` for aggregate file/match totals, `count` for per-file counts,
+  `content` for matching text (default). Item pages default to 100, with 0-based
+  `offset` and `nextOffset`. Every page scans candidates to count totals, but only
+  materializes the requested window. `complete:false` means more results or an
+  incomplete scan; `truncated`/`failed` scans are not exhaustive. Totals exclude
+  non-UTF-8 and oversized files (`skippedFiles`); read errors increment `failed`.
+  Bounds and traversal filters still apply; this is not a persistent scan cursor.
+- `ops_inspect_local_file`: one optional `path` (session cwd by default; a directory
+  is rejected), `offset` (1-based line or 16-byte hex row, default 1; legacy 0
+  also reads the first unit), `limit`
+  (1-10000, default 200), `encoding: "utf-8"`, `view: "text" | "hex"`.
+  No multiple-file, PDF, arbitrary-encoding or `pages` interface is exposed.
+- `ops_replace`: required literal `pattern` and `replacement`, optional `path`,
+  `glob`, `maxReplacements` (1-100000, default 100) and `dryRun`.
 
-Their important fields are:
-
-- `ops_glob`: `pattern: string[]`, optional absolute `path`;
-- `ops_grep`: required regex `pattern`, optional absolute `path`, optional `glob`;
-- `ops_inspect_local_file`: exactly one of `file_path` or `files`, with optional
-  `offset`, `limit`, `pages`, `encoding`, `view`;
-- `ops_replace`: required `path`, `pattern` and `replacement`, plus its optional
-  replacement controls.
-
-Malformed arguments from these legacy MCP tools can be raised as `ToolCallError`
-instead of becoming a value. In PTC code, wrap every legacy call independently:
+File tools, `ops_batch` and `ops_result` return failures as values, not thrown
+exceptions: check `status` and `error.code`/`error.nextAction`. A `try/catch`
+alone misses these failures. For example:
 
 ```ts
-const safeLegacy = async (name, args) => {
-  try { return { ok: true, value: await tools[name](args) } }
-  catch (error) { return { ok: false, name, error: String(error) } }
-};
+const result = await tools.ops_grep({ path: "src", pattern: "TODO", outputMode: "summary" });
+if (result.status === "error" || result.status === "rejected") {
+  console.log({ status: result.status, error: result.error });
+} else {
+  console.log({ files: result.files, matches: result.matches, complete: result.complete });
+}
 ```
 
-`ops_batch` and `ops_result` use the new canonical structured error value instead;
-they do not make legacy schemas uniform. For filesystem modifications in the
-new PTC workflow, prefer `ops_batch` or host native edit/write, not legacy
-`ops_replace`.
+File parameter bounds are described in the host-compatible SDK schema and enforced
+by the native worker, even for direct PTC calls. Required fields, enums, nested
+edit shapes and strict unknown-field rejection remain discoverable.
+Inspect's model rendering shares a homogeneous page's path once at the top level;
+raw execution/PTC values retain each item's path and all pagination/truncation
+metadata. This reduces rendered bytes, not worker pagination or measured token
+billing. Long single-line text continuation is unchanged; use the hex view to
+read beyond an in-line cut.
 
 ## Plan and execution semantics
 
@@ -290,4 +343,4 @@ live Desktop upgrade, npm release or GitHub push is claimed.
 Architecture: `native/src/{contract,paths,batch,store,results}.rs` is the shared
 Rust operation core; `main.rs` is bounded single-call JSON transport;
 `lib/ptc/{contract,worker,index}.js` is only DSH registration/authority/transport.
-Tests do not enter published business code; FastCtx sources are untouched.
+Tests do not enter published business code.

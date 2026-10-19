@@ -8,6 +8,10 @@ use std::path::{Component, Path, PathBuf};
 
 pub struct Target { pub parent: Dir, pub name: String, pub display: PathBuf }
 pub fn checked(raw: &str) -> Result<Target> {
+    checked_leaf(raw, false)
+}
+/// Missing final entries are allowed only for create/no-clobber operations.
+pub fn checked_leaf(raw: &str, allow_missing: bool) -> Result<Target> {
     let path = Path::new(raw);
     if !path.is_absolute() || raw.len() > 4096 || raw.contains('\0') {
         return Err(Failure::new("INVALID_ARGUMENT", "Expected one absolute, bounded host-resolved path"));
@@ -17,9 +21,20 @@ pub fn checked(raw: &str) -> Result<Target> {
         match component {
             Component::Prefix(prefix) => {
                 #[cfg(windows)]
-                if !matches!(prefix.kind(), std::path::Prefix::Disk(_) | std::path::Prefix::UNC(_, _)) {
-                    return Err(Failure::new("INVALID_ARGUMENT", "Device and verbatim paths are unsupported"));
+                match prefix.kind() {
+                    std::path::Prefix::Disk(_) | std::path::Prefix::UNC(_, _) => anchor.push(prefix.as_os_str()),
+                    // `std::fs::canonicalize` answers with the verbatim form (`\\?\C:\…`, `\\?\UNC\…`).
+                    // The verbatim prefix only switches off Win32 path normalization, while this layer
+                    // already demands a lexically normalized, absolute path — so normalize the spelling
+                    // instead of refusing a path the OS itself just produced.
+                    std::path::Prefix::VerbatimDisk(letter) => anchor.push(format!("{}:", letter as char)),
+                    std::path::Prefix::VerbatimUNC(server, share) => anchor.push(
+                        format!("\\\\{}{}{}", server.to_string_lossy(), std::path::MAIN_SEPARATOR, share.to_string_lossy()),
+                    ),
+                    // `\\.\…` (and a bare `\\?\` with no drive or share) names a device, not a file.
+                    _ => return Err(Failure::new("INVALID_ARGUMENT", "Device and verbatim paths are unsupported")),
                 }
+                #[cfg(not(windows))]
                 anchor.push(prefix.as_os_str());
             }
             Component::RootDir => anchor.push(component.as_os_str()),
@@ -37,7 +52,11 @@ pub fn checked(raw: &str) -> Result<Target> {
         parent = parent.open_dir_nofollow(&component)?;
     }
     regular(&parent.dir_metadata()?, true)?;
-    regular(&parent.symlink_metadata(&name)?, false)?;
+    match parent.symlink_metadata(&name) {
+        Ok(metadata) => regular(&metadata, false)?,
+        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => return Err(error.into()),
+    }
     Ok(Target { parent, name, display: path.to_path_buf() })
 }
 pub fn validate_name(name: &str) -> Result<()> {
@@ -63,7 +82,7 @@ pub fn link(metadata: &Metadata) -> bool {
 }
 pub fn regular(metadata: &Metadata, directory: bool) -> Result<()> {
     if link(metadata) || (!metadata.is_file() && !metadata.is_dir()) || (directory && !metadata.is_dir()) {
-        return Err(Failure::new("POLICY_DENIED", "Links, reparse points and special objects are not traversed; inspect the target path for the offending entry"));
+        return Err(Failure::new("PATH_RESTRICTED", "Links, reparse points and special objects are not traversed; inspect the target path for the offending entry"));
     }
     Ok(())
 }
@@ -75,4 +94,25 @@ pub fn read_file(target: &Target) -> Result<File> {
     let file = target.parent.open_with(&target.name, &options)?;
     regular(&file.metadata()?, false)?;
     Ok(file)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    /// `canonicalize` hands back `\\?\C:\…` on Windows; before this, `checked` refused it, which
+    /// is what made `file::single::tests::copy_changed_source_is_not_published` panic on Windows and
+    /// what the Darwin fixture had to work around by canonicalizing first.
+    #[test]
+    fn verbatim_paths_from_canonicalize_are_accepted_but_devices_are_still_refused() {
+        let ambient = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let spelling = ambient.to_string_lossy().to_string();
+        assert!(spelling.starts_with(r"\\?\"), "fixture expected a verbatim temp path, got {spelling}");
+        let file = ambient.join("dsh-ops-verbatim-check");
+        std::fs::write(&file, b"x").unwrap();
+        let target = checked(file.to_str().unwrap()).unwrap();
+        assert_eq!(target.name, "dsh-ops-verbatim-check");
+        let device = format!(r"\\.\{}", &spelling[4..]);
+        assert!(checked(&device).is_err(), "device paths must stay refused: {device}");
+        std::fs::remove_file(&file).unwrap();
+    }
 }

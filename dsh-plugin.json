@@ -23,12 +23,12 @@
     {
       "name": "dsh-ops.process.spawn",
       "scope": "subprocess",
-      "reason": "Start fixed trusted native file operations through DSH subprocess and policy checks, or confined Bash/PTC execution; FastCtx background is explicitly opt-in and full-access-only."
+      "reason": "Start fixed trusted native file operations through DSH subprocess and policy checks, or confined Bash/PTC execution."
     },
     {
       "name": "dsh-ops.fs.read",
       "scope": "filesystem-read",
-      "reason": "Read the native worker executable and runtime provenance, plus the optional FastCtx background runtime."
+      "reason": "Read the native worker executable and runtime provenance."
     },
     {
       "name": "dsh-ops.fs.write",
@@ -39,7 +39,7 @@
   "contributes": {
     "x-display": [
       {
-        "icon": "./icon.png",
+        "icon": "./docs/assets/icon.png",
         "title": "dsh-ops",
         "description": "Provides bash, PowerShell 7, and a suite of high-performance tools written in Rust for DSH to enhance token efficiency",
         "locales": [
@@ -60,9 +60,9 @@
         "summary": "Prefer bash; use the bundled PowerShell 7 for Windows-native functionality where that payload exists; removed when the shell component is off."
       },
       {
-        "name": "dsh-ops:repository-tooling:background",
+        "name": "dsh-ops:repository-tooling:ptc",
         "order": 3252,
-        "summary": "Owned background tasks only; absent by default."
+        "summary": "Scoped PTC batch/result guidance; absent when PTC tools are unavailable."
       }
     ],
     "x-tool-namespaces": [
@@ -75,22 +75,16 @@
           "inspect_local_file",
           "grep",
           "glob",
-          "replace"
+          "replace",
+          "write_file",
+          "edit_file",
+          "diff",
+          "stat",
+          "copy",
+          "move",
+          "remove"
         ],
         "shellPermission": "Per-call DSH sandbox policy and native subprocess"
-      },
-      {
-        "serverName": "fastctx",
-        "transport": "stdio",
-        "source": "optional FastCtx background backend",
-        "publicPrefix": "ops_",
-        "tools": [
-          "run_background",
-          "job_output",
-          "job_list",
-          "job_kill"
-        ],
-        "shellPermission": "background component enabled AND enableShellTools AND per-session sandboxPolicy danger-full-access"
       },
       {
         "serverName": "dsh-ops",
@@ -107,12 +101,12 @@
       {
         "id": "dsh-ops-ptc",
         "entry": "dsh-ops/ptc",
-        "defaultEnabled": false,
+        "defaultEnabled": true,
         "platforms": ["win32", "linux", "darwin"],
         "architectures": ["x64", "arm64"],
         "targets": ["win32-x64", "linux-x64", "darwin-arm64"],
         "presentation": "PTC-only",
-        "runtime": "independent native Rust file worker; no FastCtx dependency",
+        "runtime": "independent native Rust file worker",
         "tools": ["ops_batch", "ops_result"],
         "permissions": "Per-call original DSH sandboxPolicy and sandbox.confine (host full/partial enforcement reported); full access bypasses confinement and permits explicit operation roots; subprocess owns cancellation and credential scrub"
       },
@@ -131,10 +125,29 @@
         "targets": ["win32-x64", "linux-x64", "darwin-arm64"]
       },
       {
-        "id": "dsh-ops-background",
-        "entry": "dsh-ops/background",
+        "id": "dsh-ops-panel",
+        "entry": "dsh-ops/panel",
+        "defaultEnabled": true,
+        "presentation": "Opt-in static-file capture of new conversations: the row is addressable, its switch 「启动数据检测」(capture) is off by default and an untouched row registers nothing",
+        "platforms": ["win32", "linux", "darwin"],
+        "targets": ["win32-x64", "linux-x64", "darwin-arm64"],
+        "tools": []
+      },
+      {
+        "id": "dsh-ops-tui",
+        "entry": "dsh-ops/tui",
         "defaultEnabled": false,
-        "platforms": ["win32"]
+        "presentation": "Optional read-only dsh-TUI panel API v1",
+        "tools": []
+      },
+      {
+        "id": "dsh-ops-hide-official",
+        "entry": "dsh-ops/hide-official",
+        "defaultEnabled": false,
+        "platforms": ["win32", "linux", "darwin"],
+        "strict": true,
+        "retainedOfficialCommand": { "win32": "pwsh", "linux": "bash", "darwin": "bash" },
+        "readiness": "Opt-in: READINESS_BLOCKED blocks assembly/execution only for the affected scope; healthy scopes retain verified masks. All visible official capabilities require reviewed implemented OPS equivalents before that scope is masked. run_code is not exempt; unhideable transports and own-scope registrations fail prompt assembly and execution closed."
       }
     ]
   },

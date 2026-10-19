@@ -25,15 +25,11 @@ cargo build --release --manifest-path native/Cargo.toml
 node bin/native-runtime.mjs stage --platform darwin-arm64
 ```
 
-Then point every row that needs bash at a bash the machine already has:
+Then point the shell row at a bash the machine already has:
 
 ```yaml
 - id: dsh-ops-shell
   name: dsh-ops/shell
-  config:
-    bashPath: /opt/homebrew/bin/bash
-- id: dsh-ops-background
-  name: dsh-ops/background
   config:
     bashPath: /opt/homebrew/bin/bash
 ```
@@ -50,7 +46,7 @@ capability matrix and the known limitations.
 
 ### Official plugin marketplace
 
-In the target DSH application's plugin marketplace, enter the npm package name **`dsh-ops`**, install, then enable. Installation belongs to the currently running profile, which is `desktop` for the desktop app. The published package depends on complete FastCtx, bash and PowerShell 7 payloads; it does not download them through install scripts or change the system PATH.
+In the target DSH application's plugin marketplace, enter the npm package name **`dsh-ops`**, install, then enable. Installation belongs to the currently running profile, which is `desktop` for the desktop app. The published package depends on complete bash and PowerShell 7 payloads; it does not download them through install scripts or change the system PATH.
 
 ### One-command npm installation
 
@@ -91,7 +87,7 @@ npx --yes dsh-ops@latest uninstall --profile desktop
 
 Replace `desktop` with `web` or `tui` as appropriate. You can also uninstall in the marketplace or run the official `dsh plugin --profile ... remove dsh-ops`. Binaries are managed as profile plugin dependencies; uninstalling removes dependency references without deleting system shells, copies in other profiles or shared package-manager caches.
 
-Legacy explicitly provisioned `<DSH_HOME>/dsh-ops/` files must be cleaned separately with `npx --yes dsh-ops@latest uninstall --yes`. Persistent `~/.fastctx/` state is kept by default; add `--purge-fastctx` explicitly if needed. Disabling the background component waits for in-flight calls, then attempts to terminate only its own jobs remembered on the current connection; failures produce warnings. Old jobs whose ownership was lost after disconnect, and permission downgrades alone, do not guarantee termination; handle your own jobs first.
+Legacy explicitly provisioned `<DSH_HOME>/dsh-ops/` files (provisioned shells, and the FastCtx runtime earlier versions could provision) must be cleaned separately with `npx --yes dsh-ops@latest uninstall --yes`. The `~/.fastctx/` state left by the removed background component is kept by default; add `--purge-fastctx` explicitly to remove it as well.
 
 ---
 
@@ -102,8 +98,7 @@ dsh-ops install --profile <desktop|web|tui> [--dsh-cli <path>]
 dsh-ops uninstall --profile <desktop|web|tui> [--dsh-cli <path>]
 dsh-ops status --profile <desktop|web|tui>
                                 Report target-profile installation (tui maps to dsh-tui)
-dsh-ops status                  Resolve, probe, and list the MCP tools it publishes
-dsh-ops provision [--force]     Build if needed, then install into the managed runtime dir
+dsh-ops build-ptc              Build the independent native Rust worker (all platforms)
 dsh-ops uninstall [--yes] [--purge-fastctx]
 dsh-ops ladder [--json] [--config <file>]
                                 prompt ladder actually renders; nothing is spawned
@@ -113,6 +108,7 @@ dsh-ops provision-shells [--bash] [--pwsh] [--force] [--dry-run] [--pin <file>]
 
 With `--profile`, install/uninstall delegate to the official DSH profile manager.
 Without `--profile`, uninstall only cleans legacy provisioned runtime/shell files.
+`resolve`, `status` (without `--profile`), `build` and `provision` were removed with the FastCtx background component; each now exits with a message naming its replacement.
 
 ### Environment variables
 
@@ -137,7 +133,7 @@ Use `ops_bash`'s `command` for short commands and pipelines. For scripts longer 
 
 ## Process reclamation
 
-The plugin cleans up only its own `fastctx serve` clients on final lease release, connection shutdown, normal owner exit, or forced owner termination. Upstream `runtime-host` is a reusable shared process; a dead parent alone is not a leak. With no clients and about ten minutes of inactivity, it exits normally. Do not kill it by process-name sweeps. This release does not automatically sweep processes left by older versions.
+This version starts no long-lived server process: the native file worker is owned by the file component and stops with it. Earlier versions with the background component started `fastctx serve` clients and could leave a shared FastCtx `runtime-host`; that process exits on its own after about ten minutes without clients. This release does not sweep processes left by older versions; do not kill them by process-name sweeps.
 
 ---
 
